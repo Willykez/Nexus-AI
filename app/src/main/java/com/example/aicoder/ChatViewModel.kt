@@ -62,8 +62,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (state.filesToolEnabled) {
             add(readFileTool)
             add(writeFileTool)
-            add(deleteFileTool)
             add(renameFileTool)
+            add(deleteFileTool)
         }
         add(listFilesTool)
         if (state.zipToolEnabled) add(zipProjectTool)
@@ -164,6 +164,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         viewModelScope.launch {
+            settings.activateSession(savedBaseUrl, savedModel)
             val keyForSession = settings.getApiKeyForBaseUrl(savedBaseUrl)
             currentSettings = currentSettings.copy(baseUrl = savedBaseUrl, model = savedModel, apiKey = keyForSession)
             currentClient = AiClient(savedBaseUrl, keyForSession)
@@ -190,7 +191,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val userMessage = ChatUiMessage("user", prompt)
+        val userMessage = ChatUiMessage("user", prompt, timeLabel())
         wireHistory += ChatMessage("user", prompt)
         _uiState.update {
             it.copy(
@@ -396,7 +397,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         wireHistory = messages.filter { it.role != "system" }.toMutableList()
                         _uiState.update { state ->
                             state.copy(
-                                messages = state.messages + ChatUiMessage("assistant", finalText),
+                                messages = state.messages + ChatUiMessage("assistant", finalText, timeLabel()),
                                 streamingText = "",
                                 streamingCode = "",
                                 isTyping = false,
@@ -683,6 +684,16 @@ private fun schema(properties: Map<String, String>, required: List<String>): Jso
 }
 
 
+private fun toolLabel(name: String): String = when (name) {
+    "write_file" -> "Writing file…"
+    "read_file" -> "Reading file…"
+    "rename_file" -> "Renaming item…"
+    "delete_file" -> "Deleting item…"
+    "list_files" -> "Inspecting workspace…"
+    "zip_project" -> "Zipping project…"
+    else -> "Running $name…"
+}
+
 private fun lineDelta(oldText: String, newText: String): Pair<Int, Int> {
     if (oldText == newText) return 0 to 0
     val oldLines = if (oldText.isEmpty()) emptyList() else oldText.lines()
@@ -706,6 +717,9 @@ private fun providerLabel(url: String): String = when {
     url.contains("openai", true) -> "OpenAI"
     else -> "OpenAI Compatible"
 }
+
+private fun timeLabel(): String =
+    java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
 
 private fun requiresApiKey(baseUrl: String): Boolean {
     val url = baseUrl.lowercase()

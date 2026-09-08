@@ -7,7 +7,7 @@ Nexus AI is a native Android coding agent that combines live AI chat, real file 
 - **Chat & Stream** — one-thumb composer, live SSE output, clean Markdown/code rendering, visible agent activity, live file writes, stop/cancel, and one-tap copy for a whole reply or individual code block.
 - **Code Diff** — session-scoped writes with NEW/MOD status plus added/removed line counts and previews.
 - **Workspace** — persistent private `filesDir/workspace` tree, inspector, rename/delete, project-folder import, refresh, ZIP export, and Android share sheet.
-- **Organize** — paste a complete project/source dump, stream the model's parsing work, review the inferred file manifest, then explicitly confirm writing it into the private workspace.
+- **Paste & Organize** — a sibling mode inside Chat: paste a complete project/source dump, stream the model's parsing work, review the inferred file manifest, then explicitly confirm writing it into the private workspace.
 - **Provider** — OpenAI-compatible routing for OpenAI, Gemini shim, DeepSeek, Ollama, Qwen, Groq, Mistral, or any compatible gateway; per-gateway encrypted API-key profiles; temperature/max-token controls; authoritative file/ZIP capability toggles.
 
 On narrow phones the app is a one-surface-at-a-time experience. On wide screens, Chat & Stream and Workspace are shown together so the conversation and actual files stay visible simultaneously.

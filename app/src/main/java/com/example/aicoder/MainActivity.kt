@@ -574,6 +574,12 @@ private fun ChatStreamScreen(
     var input by rememberSaveable {
         mutableStateOf("")
     }
+    var organizeMode by rememberSaveable { mutableStateOf(false) }
+
+    if (organizeMode) {
+        OrganizeScreen(state, vm) { organizeMode = false }
+        return
+    }
 
     LaunchedEffect(
         state.messages.size,
@@ -2125,14 +2131,15 @@ private fun shareZip(
 
 
 @Composable
-private fun OrganizeScreen(state: UiState, vm: ChatViewModel) {
+private fun OrganizeScreen(state: UiState, vm: ChatViewModel, onBack: () -> Unit) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, enabled = !state.isOrganizing) { Icon(Icons.Default.Code, contentDescription = "Back to chat", tint = Accent) }
             Column(Modifier.weight(1f)) {
-                Text("Organize Project", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Paste & Organize", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 Text("Paste a whole source dump and turn it into a real file tree.", color = Muted, fontSize = 11.sp)
             }
             StatusPill(if (state.isOrganizing) "LIVE" else "READY", state.providerReady)

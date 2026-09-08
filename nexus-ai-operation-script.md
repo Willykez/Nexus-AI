@@ -21,7 +21,7 @@ in order, from launch to finished output.
 4. It subscribes to `SettingsManager.settingsFlow`. Whenever settings
    change, it rebuilds the HTTP client (`AiClient`) pointed at the new
    base URL / key, and updates the "provider" badge shown in the UI.
-5. The four core tabs remain **Chat & Stream**, **Code Diff**, **Workspace**, and **Provider**. A fifth **Organize** mode is provided for the separate whole-project source-dump workflow described by the product vision.
+5. The four core tabs remain **Chat & Stream**, **Code Diff**, **Workspace**, and **Provider**. **Paste & Organize** is a sibling mode inside Chat for the separate whole-project source-dump workflow described by the product vision.
 
 ---
 
