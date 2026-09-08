@@ -1,93 +1,70 @@
-# Nexus AI — Android Agentic Coding Assistant
+# Nexus AI — Unified Mobile Coding Agent
 
-A provider-agnostic Android AI coding agent. Connects to any OpenAI-compatible
-`/chat/completions` REST endpoint (OpenAI, Ollama, DeepSeek, Gemini's OpenAI shim, LM Studio,
-vLLM, etc.), streams responses token-by-token, and lets the model natively read/write files,
-list the workspace tree, and zip the project — all sandboxed inside the app's private storage.
+Nexus AI is a native Android coding agent that combines live AI chat, real file operations, a persistent private workspace, session history, provider routing, code diffs, ZIP export, and a dedicated whole-project paste/organize workflow.
 
-## Opening the project
+## Product surfaces
 
-1. Unzip this archive.
-2. Open the root folder (`NexusAI/`) in Android Studio (Koala/2024.1+ recommended).
-3. Android Studio will offer to generate the Gradle wrapper jar automatically on first sync
-   (this archive ships `gradle-wrapper.properties` pinned to Gradle 8.9, but not the binary
-   `gradle-wrapper.jar` — Studio regenerates it, or run `gradle wrapper` once if you have a
-   local Gradle install).
-4. Sync Gradle, then Run on a device/emulator (minSdk 26).
+- **Chat & Stream** — one-thumb composer, live SSE output, clean Markdown/code rendering, visible agent activity, live file writes, stop/cancel, and one-tap copy for a whole reply or individual code block.
+- **Code Diff** — session-scoped writes with NEW/MOD status plus added/removed line counts and previews.
+- **Workspace** — persistent private `filesDir/workspace` tree, inspector, rename/delete, project-folder import, refresh, ZIP export, and Android share sheet.
+- **Organize** — paste a complete project/source dump, stream the model's parsing work, review the inferred file manifest, then explicitly confirm writing it into the private workspace.
+- **Provider** — OpenAI-compatible routing for OpenAI, Gemini shim, DeepSeek, Ollama, Qwen, Groq, Mistral, or any compatible gateway; per-gateway encrypted API-key profiles; temperature/max-token controls; authoritative file/ZIP capability toggles.
 
-## Architecture
+On narrow phones the app is a one-surface-at-a-time experience. On wide screens, Chat & Stream and Workspace are shown together so the conversation and actual files stay visible simultaneously.
 
-```
-app/src/main/java/com/nexusai/agent/
-├── MainActivity.kt              Adaptive dual-pane root (Chat | Inspector), Compose entry point
-├── data/
-│   ├── Models.kt                OpenAI-wire Kotlin@Serializable models + tool/function schemas
-│   ├── WorkspaceEngine.kt       Sandboxed read/write/list/zip file tool executor
-│   ├── AiClient.kt              Ktor SSE streaming client (provider-agnostic)
-│   └── SettingsStore.kt         SharedPreferences-backed provider config persistence
-└── ui/
-    ├── ChatViewModel.kt         Coroutine agent loop: stream -> detect tool calls -> execute -> repeat
-    ├── theme/                   Color.kt / Type.kt / Theme.kt — Material3 theme sourced from
-    │                            the Stitch "nexus_ai_*" design reference tokens
-    ├── components/              ActionCard, FileTreeView, StreamingCodeViewer, MessageBubble
-    └── screens/                 ChatScreen (Panel 1), InspectorScreen (Panel 2), SettingsScreen
-```
+## Safety invariants
 
-## How the agent loop works
+1. Agent file operations resolve through one sandbox policy rooted at the app's canonical private workspace. Absolute paths, drive-letter paths, `.` segments, `..` traversal, and escapes through symlinks are rejected.
+2. Capability toggles are enforced twice: disabled tools are omitted from the model tool list and rejected if a model attempts to call them anyway.
+3. Imported projects are copied into the private workspace; the agent never receives direct access to the original external folder.
+4. Provider API keys are encrypted with Android Keystore + AES/GCM. Keys are stored per gateway profile so switching providers does not silently destroy another provider's credential.
+5. ZIP files are created under private `filesDir/exports` and shared through `FileProvider`, never a raw `file://` URI.
+6. Each user request is capped at eight agent rounds. Hitting the limit becomes a visible stop/error state rather than an infinite loop.
+7. Tool, network, import, and export errors are surfaced in plain-language UI state/snackbars.
+8. Completed agent turns and the provider/model/base URL needed to reopen them are persisted locally. The raw tool-call wire history is retained so reopening a session does not lose agent context.
+9. Workspace and export data are excluded from Android backup/device transfer, and the manifest explicitly wires both backup rule systems.
 
-1. User sends a message → appended to the OpenAI-format conversation history.
-2. `AiClient.streamChatCompletion` opens a streaming POST to `{baseUrl}/chat/completions` with
-   `tools` set to the four native functions, parses `data:` SSE lines, and emits fine-grained
-   `StreamEvent`s (`ContentDelta`, `ToolCallStart`, `ToolCallArgumentsDelta`, `Done`, `Error`).
-3. `ChatViewModel` reduces those events into live Compose state — assistant text grows character
-   by character, and as soon as a tool call's `path` argument becomes readable mid-stream, an
-   `ActionCard` appears in the Activity Feed and a matching row lights up in the File Inspector.
-4. Once a turn finishes, any requested tool calls are executed via `WorkspaceEngine` (confined to
-   `context.filesDir/workspace`), their results are appended back into the conversation as
-   `role: "tool"` messages, and the loop calls the model again — up to 8 iterations — so the
-   agent can chain multiple file writes, re-read what it wrote, and finally zip the project.
+## Project import and organize mode
 
-## Configuring a provider
+**Import Project** is the safe folder workflow: Android's system folder picker is used, readable project files are copied into the app's private workspace, and generated directories such as `.git`, `.gradle`, `build`, and `node_modules` are skipped. Other dotfiles such as `.gitignore` and `.env.example` are retained.
 
-Open Settings (top-right icon) and either pick a preset chip (OpenAI / Ollama / DeepSeek /
-Gemini shim) or enter a custom Base URL + API key + model manually. Everything is stored
-on-device only, in `nexus_ai_settings` SharedPreferences (excluded from Android backups).
+**Organize** is the source-dump workflow: paste a large source blob, let the active provider infer a safe root and relative paths, review the result, then explicitly confirm the write. Large pastes display a context-size warning rather than silently truncating the input.
 
-## CI (GitHub Actions)
+## Provider examples
 
-`.github/workflows/ci.yml` builds a debug APK on every push/PR, and a signed release APK on
-pushes to `main`. It expects four repo secrets for the release job:
+- OpenAI: `https://api.openai.com/v1`
+- DeepSeek: `https://api.deepseek.com/v1`
+- Gemini OpenAI-compatible shim: `https://generativelanguage.googleapis.com/v1beta/openai`
+- Ollama emulator host: `http://10.0.2.2:11434/v1`
+- Qwen compatible mode: `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
+- Groq: `https://api.groq.com/openai/v1`
+- Mistral: `https://api.mistral.ai/v1`
 
-| Secret            | Purpose                                        |
-|--------------------|-------------------------------------------------|
-| `KEYSTORE_B64`     | base64 of your upload `.jks`/`.keystore` file   |
-| `STORE_PASSWORD`   | keystore password                               |
-| `KEY_ALIAS`        | alias of the signing key inside the keystore    |
-| `KEY_PASSWORD`     | password of that key entry                      |
+The app uses streaming OpenAI-compatible `/chat/completions` requests. Any gateway implementing that contract can be entered manually.
 
-`app/build.gradle.kts` only wires up `signingConfigs["release"]` when
-`<repo-root>/my-upload-key.jks` exists on disk (i.e. only inside the CI job, after the
-"Decode release keystore" step runs) — so a local `./gradlew assembleRelease` without those
-secrets just produces an unsigned APK instead of failing the build.
+## Build
 
-To generate a new upload keystore locally:
+Open the project in Android Studio with **JDK 17**. The project targets Android 15 (`compileSdk 35`) and uses Android Gradle Plugin 8.7.3 with Gradle 8.9.
 
 ```bash
-keytool -genkeypair -v -keystore my-upload-key.jks -alias upload \
-  -keyalg RSA -keysize 2048 -validity 10000
-base64 -w0 my-upload-key.jks   # paste the output into the KEYSTORE_B64 secret
+./gradlew assembleDebug
+./gradlew testDebugUnitTest
 ```
 
-## Notes / things to double check before shipping
+The sandbox used for this review did not have network access to download the Gradle distribution, so an APK build could not be executed here. CI is configured to perform the debug build and unit tests on GitHub Actions.
 
-- **Fonts**: the theme references Geist + JetBrains Mono conceptually but falls back to
-  `FontFamily.SansSerif` / `FontFamily.Monospace` so the project compiles without bundled font
-  assets. Swap in `androidx.compose.ui.text.googlefonts.GoogleFont` providers (or drop `.ttf`
-  files into `res/font/`) in `ui/theme/Type.kt` for the exact reference typefaces.
-- **App icon**: no custom launcher icon/mipmap set is included; the manifest omits
-  `android:icon` so the platform default is used. Add your own adaptive icon before release.
-- **Ollama base URL**: defaults to `http://10.0.2.2:11434/v1`, which is the emulator's alias for
-  the host machine's `localhost`. On a physical device, point it at your machine's LAN IP instead.
-- This project was written and balance-checked (braces/parens) by hand in a sandboxed
-  environment without Android SDK/Gradle available, so it has **not** been compiled. Skim for
-  typos on first sync, though the code has been reviewed carefully for API correctness.
+## Release signing
+
+Set these environment variables for a signed release build:
+
+- `RELEASE_KEYSTORE_PATH`
+- `RELEASE_KEYSTORE_PASSWORD`
+- `RELEASE_KEY_ALIAS`
+- `RELEASE_KEY_PASSWORD`
+
+Without them, `assembleRelease` remains usable and produces an unsigned APK.
+
+
+## Validation status
+
+The source includes unit coverage for the workspace path policy. The sandbox used to prepare this archive does not contain the Android SDK or a locally cached Gradle 8.9 distribution, so a final APK build cannot be honestly claimed from this environment. CI is configured to build the debug APK and run unit tests with JDK 17.
