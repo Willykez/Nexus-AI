@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -269,6 +270,7 @@ private fun AICoderRoot(viewModel: ChatViewModel) {
                 }
             }
         }
+    }
     }
 
     pendingDeleteSession?.let { session ->
@@ -681,7 +683,6 @@ private fun ChatStreamScreen(
             onStop = vm::stopAgent
         )
     }
-}
 
 @Composable
 private fun SessionStrip(
@@ -1214,11 +1215,6 @@ private fun Composer(
                 Chip(
                     text = provider,
                     color = Color(0xFF1E2A33)
-                )
-
-                Chip(
-                    text = state.providerName,
-                    color = if (state.providerReady) Color(0xFF123D25) else Color(0xFF3A2F24)
                 )
 
                 Chip(

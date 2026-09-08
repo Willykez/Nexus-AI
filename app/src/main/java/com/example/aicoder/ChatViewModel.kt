@@ -222,7 +222,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isOrganizing = false,
                 activeTask = "Stopped",
                 activeTool = null,
-                isOrganizing = false,
                 organizeStreaming = "",
                 activity = listOf(ActivityItem(nextId(), ActivityKind.SYSTEM, "Run stopped", "Agent execution was cancelled by the user.", success = null)) + it.activity.take(19)
             )
@@ -581,7 +580,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(isOrganizing = true, organizeStreaming = "", organizeProjectName = null, organizeFiles = emptyList(), error = null, activeTask = "Organizing pasted project…") }
             try {
                 val request = ChatRequest(
-                    model = active.modelName,
+                    model = state.modelName,
                     messages = listOf(ChatMessage("system", organizeSystemPrompt()), ChatMessage("user", source)),
                     tools = null,
                     stream = true,
@@ -653,9 +652,41 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun sanitizeProjectName(raw: String): String = raw.trim().replace(Regex("[^A-Za-z0-9._-]"), "_").trim('_', '.', '-').ifBlank { "project" }
 
     private fun extractStreamingContent(arguments: String): String {
-        val match = Regex("\\"content\\"\\s*:\\s*\\"((?:\\\\.|[^\\"\\\\])*)").find(arguments) ?: return ""
+        val match = Regex("""["]content["]\s*:\s*["]((?:\\.|[^"\\])*)["]""").find(arguments) ?: return ""
         return runCatching { parser.decodeFromString<String>("\"${match.groupValues[1]}\"") }.getOrDefault("")
     }
+
+    private fun nextId(): Long = eventIds.incrementAndGet()
+
+    private fun addActivity(
+        kind: ActivityKind,
+        title: String,
+        detail: String,
+        progress: Int? = null,
+        success: Boolean? = null
+    ) {
+        _uiState.update { state ->
+            state.copy(
+                activity = listOf(
+                    ActivityItem(nextId(), kind, title, detail, progress, success)
+                ) + state.activity.take(19)
+            )
+        }
+    }
+
+    private fun systemPrompt(): String = """
+        You are Nexus AI, a mobile coding agent operating inside a private workspace sandbox.
+        Help the user inspect, create, modify, rename, delete, and package project files when explicitly requested.
+        Use the provided workspace tools instead of pretending that a file operation happened.
+        Paths are always relative to the workspace; never use absolute paths, parent traversal, or escape attempts.
+        Read existing files before modifying them when the change depends on their current contents.
+        For deletion, require a clear user request and do not delete unrelated files.
+        Keep edits focused and preserve existing project structure unless the user asks for restructuring.
+        After tool results, verify the outcome and summarize what changed.
+        Do not claim builds, tests, commands, or file changes succeeded unless the available tools actually performed them.
+        The workspace may contain source code, configuration, documentation, and hidden files; treat all workspace content as user data.
+        You have a maximum of 8 agent rounds for a single request.
+    """.trimIndent()
 
     private class MutableToolCall {
         var id: String = ""

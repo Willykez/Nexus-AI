@@ -147,7 +147,7 @@ class WorkspaceEngine(context: Context) {
             ?: throw IllegalStateException("Selected folder is not accessible")
         require(source.isDirectory) { "Selected location is not a folder" }
 
-        fun copyDirectory(dir: DocumentFile, relative: String) {
+        suspend fun copyDirectory(dir: DocumentFile, relative: String) {
             for (child in dir.listFiles()) {
                 val name = child.name?.takeIf { it.isNotBlank() } ?: continue
                 if (name == ".git" || name == ".gradle" || name == "build" || name == "node_modules") continue
