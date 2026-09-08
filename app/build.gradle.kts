@@ -21,7 +21,7 @@ android {
     signingConfigs {
         create("release") {
             val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
-            if (!keystorePath.isNullOrBlank()) {
+            if (!keystorePath.isNullOrBlank() && file(keystorePath).isFile) {
                 storeFile = file(keystorePath)
                 storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("RELEASE_KEY_ALIAS")
@@ -34,7 +34,7 @@ android {
         release {
             isMinifyEnabled = false
             val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
-            if (!keystorePath.isNullOrBlank()) {
+            if (!keystorePath.isNullOrBlank() && file(keystorePath).isFile) {
                 signingConfig = signingConfigs.getByName("release")
             }
             proguardFiles(
@@ -59,6 +59,12 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+
+    lint {
+        // AGP 8.7.x + Kotlin 2.0.x can trigger an upstream LiveData lint/UAST
+        // binary incompatibility. This detector is not used by Nexus AI.
+        disable += "NullSafeMutableLiveData"
     }
 }
 
