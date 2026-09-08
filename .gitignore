@@ -1,14 +1,50 @@
-*.iml
+# Built application files
+*.apk
+*.aar
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+release/
+
+# Gradle files
 .gradle/
-/local.properties
-/.idea/
-.DS_Store
-/build
-/app/build
-/captures
-.externalNativeBuild
-.cxx
+build/
+
+# Local configuration file (contains SDK path, machine-specific)
 local.properties
-*.keystore
+
+# Signing / secrets — never commit real keystores
 *.jks
+*.keystore
 !debug.keystore
+my-upload-key.jks
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Log files
+*.log
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Keystore properties (if you add one for local release signing)
+keystore.properties
