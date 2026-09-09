@@ -1,0 +1,112 @@
+name: Nexus Forge CI — Build APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '21'
+  GRADLE_VERSION: '8.9'
+
+jobs:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Debug APK — runs on every push and PR
+  # ───────────────────────────────────────────────────────────────────────────
+  build-debug:
+    name: Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-read-only: false
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusForge-debug-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Signed release APK — only on push to main, only if signing secrets are set
+  # ───────────────────────────────────────────────────────────────────────────
+  build-release:
+    name: Release APK
+    runs-on: ubuntu-latest
+    needs: build-debug
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-read-only: true
+
+      # ───────────────────────────────────────────────────────────────────────
+      # Release keystore
+      # Required GitHub Secrets (repo Settings → Secrets and variables → Actions):
+      #
+      # KEYSTORE_B64      base64 of your .jks/.keystore file
+      # STORE_PASSWORD    keystore password
+      # KEY_ALIAS         alias of the signing key inside the keystore
+      # KEY_PASSWORD      password of that key entry
+      #
+      # app/build.gradle.kts only wires up signingConfigs["release"] when
+      # <repo-root>/my-upload-key.jks exists on disk, so a fork without these
+      # secrets configured produces an unsigned release APK instead of failing.
+      # ───────────────────────────────────────────────────────────────────────
+
+      - name: Decode release keystore
+        if: ${{ secrets.KEYSTORE_B64 != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: echo "$KEYSTORE_B64" | base64 --decode > my-upload-key.jks
+
+      - name: Build release APK
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusForge-release-${{ github.run_number }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 30
+          if-no-files-found: error

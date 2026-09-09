@@ -4,17 +4,17 @@
 
     <application
         android:allowBackup="true"
-        android:label="Nexus AI"
-        android:icon="@drawable/ic_nexus_logo"
-        android:roundIcon="@drawable/ic_nexus_logo"
-        android:theme="@style/Theme.AICoder"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.NexusForge"
         android:supportsRtl="true"
-        android:fullBackupContent="@xml/backup_rules"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:networkSecurityConfig="@xml/network_security_config">
+        android:fullBackupContent="@xml/backup_rules">
+
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -23,7 +23,7 @@
 
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="com.example.aicoder.fileprovider"
+            android:authorities="com.nexusforge.app.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data

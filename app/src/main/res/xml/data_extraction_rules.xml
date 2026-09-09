@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    API keys are Keystore-encrypted at rest, but we still exclude the settings
+    DataStore from cloud backup/device-transfer entirely so no key material,
+    encrypted or not, ever leaves the device via backup channels.
+-->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="file" path="datastore/"/>
-        <exclude domain="file" path="workspace/"/>
-        <exclude domain="file" path="exports/"/>
+        <exclude domain="file" path="datastore/nexus_forge_settings.preferences_pb" />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="file" path="datastore/"/>
-        <exclude domain="file" path="workspace/"/>
-        <exclude domain="file" path="exports/"/>
+        <exclude domain="file" path="datastore/nexus_forge_settings.preferences_pb" />
     </device-transfer>
 </data-extraction-rules>

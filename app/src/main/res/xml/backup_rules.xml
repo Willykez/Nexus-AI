@@ -1,6 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <exclude domain="file" path="datastore/"/>
-    <exclude domain="file" path="workspace/"/>
-    <exclude domain="file" path="exports/"/>
+    <exclude domain="file" path="datastore/nexus_forge_settings.preferences_pb" />
 </full-backup-content>
