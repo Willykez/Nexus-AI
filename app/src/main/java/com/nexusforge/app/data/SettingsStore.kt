@@ -23,7 +23,8 @@ data class AppSettings(
     val capabilities: CapabilityFlags,
     val temperature: Float,
     val maxOutputTokens: Int,
-    val projectSource: ProjectSource
+    val projectSource: ProjectSource,
+    val themeMode: ThemeMode
 )
 
 /**
@@ -44,6 +45,7 @@ class SettingsStore(private val context: Context) {
         val projectMode = stringPreferencesKey("project_mode") // "sandbox" | "attached"
         val attachedTreeUri = stringPreferencesKey("attached_tree_uri")
         val attachedDisplayName = stringPreferencesKey("attached_display_name")
+        val themeMode = stringPreferencesKey("theme_mode") // "system" | "light" | "dark"
     }
 
     val settingsFlow: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
@@ -67,8 +69,23 @@ class SettingsStore(private val context: Context) {
             ),
             temperature = prefs[Keys.temperature]?.toFloatOrNull() ?: 0.2f,
             maxOutputTokens = prefs[Keys.maxTokens]?.toIntOrNull() ?: 8192,
-            projectSource = source
+            projectSource = source,
+            themeMode = when (prefs[Keys.themeMode]) {
+                "light" -> ThemeMode.LIGHT
+                "dark" -> ThemeMode.DARK
+                else -> ThemeMode.SYSTEM
+            }
         )
+    }
+
+    suspend fun saveThemeMode(mode: ThemeMode) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.themeMode] = when (mode) {
+                ThemeMode.LIGHT -> "light"
+                ThemeMode.DARK -> "dark"
+                ThemeMode.SYSTEM -> "system"
+            }
+        }
     }
 
     suspend fun saveProvider(baseUrl: String, apiKey: String, model: String) {

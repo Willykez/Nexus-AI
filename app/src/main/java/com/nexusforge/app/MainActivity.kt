@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -31,12 +32,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import com.nexusforge.app.data.AppTab
 import com.nexusforge.app.ui.screens.ChatScreen
 import com.nexusforge.app.ui.screens.HistoryScreen
@@ -55,7 +58,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            NexusForgeTheme {
+            val state by viewModel.state.collectAsState()
+            val useDarkTheme = when (state.settings?.themeMode ?: com.nexusforge.app.data.ThemeMode.SYSTEM) {
+                com.nexusforge.app.data.ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                com.nexusforge.app.data.ThemeMode.LIGHT -> false
+                com.nexusforge.app.data.ThemeMode.DARK -> true
+            }
+            val view = androidx.compose.ui.platform.LocalView.current
+            SideEffect {
+                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !useDarkTheme
+            }
+            NexusForgeTheme(themeMode = state.settings?.themeMode ?: com.nexusforge.app.data.ThemeMode.SYSTEM) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     NexusForgeApp(viewModel)
                 }
@@ -170,7 +183,8 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
                             onSaveCapabilities = viewModel::saveCapabilities,
                             onSaveGeneration = viewModel::saveGenerationParams,
                             onSwitchToSandbox = viewModel::switchToSandbox,
-                            onAttachFolder = viewModel::attachRealFolder
+                            onAttachFolder = viewModel::attachRealFolder,
+                            onSetThemeMode = viewModel::setThemeMode
                         )
                     }
                 }

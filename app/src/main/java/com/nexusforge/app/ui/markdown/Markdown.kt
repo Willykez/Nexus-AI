@@ -91,14 +91,14 @@ private fun splitMarkdownBlocks(raw: String): List<MdBlock> {
     return blocks
 }
 
-private fun renderInline(line: String): AnnotatedString = buildAnnotatedString {
+private fun renderInline(line: String, codeBackground: androidx.compose.ui.graphics.Color): AnnotatedString = buildAnnotatedString {
     var cursor = 0
     for (match in INLINE_TOKEN.findAll(line)) {
         if (match.range.first > cursor) append(line.substring(cursor, match.range.first))
         val token = match.value
         when {
             token.startsWith("**") -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(token.removeSurrounding("**")) }
-            token.startsWith("`") -> withStyle(SpanStyle(fontFamily = MonoFamily, background = androidx.compose.ui.graphics.Color(0x22FFFFFF))) {
+            token.startsWith("`") -> withStyle(SpanStyle(fontFamily = MonoFamily, background = codeBackground)) {
                 append(" ${token.removeSurrounding("`")} ")
             }
             token.startsWith("*") -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(token.removeSurrounding("*")) }
@@ -140,6 +140,7 @@ private fun CodeBlock(language: String?, code: String) {
 @Composable
 fun MarkdownText(raw: String, modifier: Modifier = Modifier) {
     val blocks = remember(raw) { splitMarkdownBlocks(raw) }
+    val codeBackground = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
     Column(modifier = modifier) {
         for (block in blocks) {
             when (block) {
@@ -157,7 +158,7 @@ fun MarkdownText(raw: String, modifier: Modifier = Modifier) {
                                     header != null -> {
                                         val level = header.groupValues[1].length
                                         Text(
-                                            text = renderInline(header.groupValues[2]),
+                                            text = renderInline(header.groupValues[2], codeBackground),
                                             style = if (level <= 2) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
                                             fontWeight = FontWeight.Bold,
                                             modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
@@ -165,11 +166,11 @@ fun MarkdownText(raw: String, modifier: Modifier = Modifier) {
                                     }
                                     bullet != null -> Row(Modifier.padding(start = (bullet.groupValues[1].length * 4).dp, top = 2.dp)) {
                                         Text("•  ", style = MaterialTheme.typography.bodyMedium)
-                                        Text(renderInline(bullet.groupValues[2]), style = MaterialTheme.typography.bodyMedium)
+                                        Text(renderInline(bullet.groupValues[2], codeBackground), style = MaterialTheme.typography.bodyMedium)
                                     }
                                     numbered != null -> Row(Modifier.padding(start = (numbered.groupValues[1].length * 4).dp, top = 2.dp)) {
                                         Text("${numbered.groupValues[2]}.  ", style = MaterialTheme.typography.bodyMedium)
-                                        Text(renderInline(numbered.groupValues[3]), style = MaterialTheme.typography.bodyMedium)
+                                        Text(renderInline(numbered.groupValues[3], codeBackground), style = MaterialTheme.typography.bodyMedium)
                                     }
                                     quote != null -> Surface(
                                         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -177,14 +178,14 @@ fun MarkdownText(raw: String, modifier: Modifier = Modifier) {
                                         modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
                                     ) {
                                         Text(
-                                            renderInline(quote.groupValues[1]),
+                                            renderInline(quote.groupValues[1], codeBackground),
                                             modifier = Modifier.padding(8.dp),
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontStyle = FontStyle.Italic
                                         )
                                     }
                                     else -> Text(
-                                        renderInline(rawLine),
+                                        renderInline(rawLine, codeBackground),
                                         style = MaterialTheme.typography.bodyMedium,
                                         modifier = Modifier.padding(top = 2.dp)
                                     )

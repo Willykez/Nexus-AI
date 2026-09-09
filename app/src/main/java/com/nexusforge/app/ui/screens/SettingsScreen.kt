@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -33,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.nexusforge.app.data.AppSettings
 import com.nexusforge.app.data.ProjectSource
 import com.nexusforge.app.data.SettingsStore
+import com.nexusforge.app.data.ThemeMode
 
 @Composable
 fun SettingsScreen(
@@ -41,7 +43,8 @@ fun SettingsScreen(
     onSaveCapabilities: (Boolean, Boolean) -> Unit,
     onSaveGeneration: (Float, Int) -> Unit,
     onSwitchToSandbox: () -> Unit,
-    onAttachFolder: (android.net.Uri, String) -> Unit
+    onAttachFolder: (android.net.Uri, String) -> Unit,
+    onSetThemeMode: (ThemeMode) -> Unit
 ) {
     if (settings == null) return
     val context = LocalContext.current
@@ -62,6 +65,17 @@ fun SettingsScreen(
     }
 
     LazyColumn(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        item {
+            Text("Appearance", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThemeChoiceChip("System", settings.themeMode == ThemeMode.SYSTEM) { onSetThemeMode(ThemeMode.SYSTEM) }
+                ThemeChoiceChip("Light", settings.themeMode == ThemeMode.LIGHT) { onSetThemeMode(ThemeMode.LIGHT) }
+                ThemeChoiceChip("Dark", settings.themeMode == ThemeMode.DARK) { onSetThemeMode(ThemeMode.DARK) }
+            }
+        }
+
+        item { HorizontalDivider() }
+
         item {
             Text("Project source", style = MaterialTheme.typography.titleMedium)
             Text(
@@ -151,4 +165,9 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+@Composable
+private fun ThemeChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
 }

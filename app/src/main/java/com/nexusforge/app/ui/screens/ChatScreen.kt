@@ -44,7 +44,7 @@ fun ChatScreen(state: AppUiState, onSend: (String) -> Unit, onStop: () -> Unit) 
 
     Column(Modifier.fillMaxSize()) {
         if (state.messages.isEmpty()) {
-            EmptyChatHint(state)
+            EmptyChatHint(state, modifier = Modifier.weight(1f))
         } else {
             LazyColumn(
                 state = listState,
@@ -82,13 +82,20 @@ fun ChatScreen(state: AppUiState, onSend: (String) -> Unit, onStop: () -> Unit) 
             onStop = onStop,
             isRunning = state.isAgentRunning,
             providerBadge = {
-                ProviderBadge(providerLabel, settings?.provider?.model ?: "no model", isReady)
-                Box(Modifier.padding(start = 6.dp)) {
+                androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+                    ProviderBadge(providerLabel, settings?.provider?.model ?: "no model", isReady)
                     val sourceLabel = when (val s = settings?.projectSource) {
                         is ProjectSource.AttachedFolder -> s.displayName
                         else -> "Sandbox"
                     }
-                    Text("· $sourceLabel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "· $sourceLabel",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
                 }
             }
         )
@@ -107,9 +114,9 @@ private fun StatusRow(label: String) {
 }
 
 @Composable
-private fun EmptyChatHint(state: AppUiState) {
+private fun EmptyChatHint(state: AppUiState, modifier: Modifier = Modifier) {
     Column(
-        Modifier.fillMaxSize().padding(24.dp),
+        modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

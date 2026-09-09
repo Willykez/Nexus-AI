@@ -150,3 +150,5 @@ data class CapabilityFlags(
     val fileReadWriteEnabled: Boolean = true,
     val zipEnabled: Boolean = true
 )
+
+enum class ThemeMode { SYSTEM, LIGHT, DARK }

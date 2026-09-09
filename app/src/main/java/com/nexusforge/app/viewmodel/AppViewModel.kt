@@ -461,6 +461,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { settingsStore.saveGenerationParams(temperature, maxTokens) }
     }
 
+    fun setThemeMode(mode: com.nexusforge.app.data.ThemeMode) {
+        viewModelScope.launch { settingsStore.saveThemeMode(mode) }
+    }
+
     fun switchToSandbox() {
         viewModelScope.launch {
             settingsStore.setProjectSourceSandbox()

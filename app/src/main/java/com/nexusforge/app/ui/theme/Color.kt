@@ -17,5 +17,13 @@ val SuccessGreen = Color(0xFF4ADE80)
 val ErrorRed = Color(0xFFF87171)
 
 val SurfaceLight = Color(0xFFF7F8FB)
+val PanelLight = Color(0xFFFFFFFF)
+val PanelLightElevated = Color(0xFFEDEFF5)
+val StrokeSubtleLight = Color(0xFFDBDFE8)
 val TextPrimaryLight = Color(0xFF14161C)
 val TextSecondaryLight = Color(0xFF5B6172)
+
+// The dark accent teal is too low-contrast as a filled-button color on a white background —
+// this is the same hue, darkened, used as `primary` in the light scheme specifically.
+val AccentForgeOnLight = Color(0xFF0E8C7C)
+val AccentAmberOnLight = Color(0xFFB9791E)
