@@ -83,7 +83,7 @@ jobs:
       # KEYSTORE_B64      base64 of your .jks/.keystore file
       # STORE_PASSWORD    keystore password
       # KEY_ALIAS         alias of the signing key inside the keystore
-      # KEY_PASSWORD      password of that key entry
+      # KEY_PASSWORD      password of that key entry again
       #
       # app/build.gradle.kts only wires up signingConfigs["release"] when
       # <repo-root>/my-upload-key.jks exists on disk, so a fork without these
