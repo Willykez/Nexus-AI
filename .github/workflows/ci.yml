@@ -2,9 +2,11 @@ name: Nexus Forge CI — Build APK
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -12,14 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  JAVA_VERSION: '21'
-  GRADLE_VERSION: '8.9'
+  JAVA_VERSION: '17'
 
 jobs:
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # Debug APK — runs on every push and PR
-  # ───────────────────────────────────────────────────────────────────────────
+  # ============================================================
+  # DEBUG APK
+  # ============================================================
   build-debug:
     name: Debug APK
     runs-on: ubuntu-latest
@@ -36,9 +37,14 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
-          cache-read-only: false
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Show build environment
+        run: |
+          java -version
+          ./gradlew --version
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
@@ -51,13 +57,15 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # Signed release APK — only on push to main, only if signing secrets are set
-  # ───────────────────────────────────────────────────────────────────────────
+
+  # ============================================================
+  # RELEASE APK
+  # ============================================================
   build-release:
     name: Release APK
     runs-on: ubuntu-latest
     needs: build-debug
+
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
@@ -72,30 +80,33 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
-          cache-read-only: true
 
-      # ───────────────────────────────────────────────────────────────────────
-      # Release keystore
-      # Required GitHub Secrets (repo Settings → Secrets and variables → Actions):
-      #
-      # KEYSTORE_B64      base64 of your .jks/.keystore file
-      # STORE_PASSWORD    keystore password
-      # KEY_ALIAS         alias of the signing key inside the keystore
-      # KEY_PASSWORD      password of that key entry again
-      #
-      # app/build.gradle.kts only wires up signingConfigs["release"] when
-      # <repo-root>/my-upload-key.jks exists on disk, so a fork without these
-      # secrets configured produces an unsigned release APK instead of failing.
-      # ───────────────────────────────────────────────────────────────────────
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
 
+      - name: Show build environment
+        run: |
+          java -version
+          ./gradlew --version
+
+      # ========================================================
+      # Decode signing key if configured
+      # ========================================================
       - name: Decode release keystore
-        if: ${{ secrets.KEYSTORE_B64 != '' }}
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
-        run: echo "$KEYSTORE_B64" | base64 --decode > my-upload-key.jks
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "Release keystore secret found."
+            echo "$KEYSTORE_B64" | base64 -d > my-upload-key.jks
+          else
+            echo "No release keystore configured."
+            echo "Building unsigned release APK."
+          fi
 
+      # ========================================================
+      # Build release APK
+      # ========================================================
       - name: Build release APK
         env:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
@@ -103,6 +114,9 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
+      # ========================================================
+      # Upload release APK
+      # ========================================================
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
