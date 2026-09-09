@@ -74,7 +74,7 @@ class AiClient(private val config: ProviderConfig) {
                     close(IllegalStateException(message, t))
                 }
 
-                override fun onClosed(eventSource: EventSource) = close()
+                override fun onClosed(eventSource: EventSource) { close() }
             }
         )
 

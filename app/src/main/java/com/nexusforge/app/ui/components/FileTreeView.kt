@@ -119,4 +119,4 @@ private fun TreeRow(
 
 // small local Box helper to avoid importing foundation.layout.Box collision noise above
 @Composable
-private fun Box(content: @Composable () -> Unit) = androidx.compose.foundation.layout.Box(content = content)
+private fun Box(content: @Composable () -> Unit) = androidx.compose.foundation.layout.Box(content = { content() })
