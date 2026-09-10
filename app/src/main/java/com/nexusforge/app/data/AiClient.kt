@@ -78,7 +78,14 @@ class AiClient(private val config: ProviderConfig) {
             }
         )
 
-        awaitClose { eventSource.cancel() }
+        awaitClose {
+            // Cancelling a still-active streaming call can force a real, blocking socket
+            // close — same class of bug as close() below, and the more likely trigger of the
+            // two: this runs at the end of EVERY stream (not just final cleanup), and a
+            // longer-running response (e.g. a large code block) leaves a wider window where
+            // the connection is still genuinely live when this fires. Dispatch it off Main.
+            Thread { runCatching { eventSource.cancel() } }.start()
+        }
     }
 
     /**
