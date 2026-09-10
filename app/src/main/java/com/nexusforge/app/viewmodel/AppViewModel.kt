@@ -79,8 +79,13 @@ data class AppUiState(
 
     // organizer
     val organizerLog: List<LogLine> = emptyList(),
-    val organizerRunning: Boolean = false
+    val organizerRunning: Boolean = false,
+    val organizerPhase: OrganizerPhase = OrganizerPhase.IDLE,
+    val organizerThinkingChars: Int = 0,
+    val organizerResultSummary: String? = null
 )
+
+enum class OrganizerPhase { IDLE, THINKING, WRITING, DONE, FAILED }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -522,24 +527,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val settings = _state.value.settings ?: return
         val engine = workspaceEngine ?: return
         if (rawDump.isBlank() || _state.value.organizerRunning) return
-        _state.update { it.copy(organizerRunning = true, organizerLog = emptyList()) }
+        _state.update {
+            it.copy(
+                organizerRunning = true, organizerLog = emptyList(), organizerPhase = OrganizerPhase.THINKING,
+                organizerThinkingChars = 0, organizerResultSummary = null
+            )
+        }
         viewModelScope.launch {
             ProjectDumpEngine(settings.provider).organize(rawDump, engine).collect { progress ->
                 when (progress) {
                     is ProjectDumpEngine.Progress.Thinking ->
-                        _state.update { it.copy(organizerLog = listOf(LogLine("Reading your paste… (${progress.charsReceived} chars so far)"))) }
+                        _state.update { it.copy(organizerThinkingChars = progress.charsReceived) }
                     is ProjectDumpEngine.Progress.Parsed ->
-                        _state.update { it.copy(organizerLog = it.organizerLog + LogLine("Found ${progress.fileCount} files for project \"${progress.projectName}\" — writing…")) }
+                        _state.update {
+                            it.copy(
+                                organizerPhase = OrganizerPhase.WRITING,
+                                organizerLog = listOf(LogLine("Found ${progress.fileCount} files for project \"${progress.projectName}\" — writing…"))
+                            )
+                        }
                     is ProjectDumpEngine.Progress.Writing ->
                         _state.update { it.copy(organizerLog = it.organizerLog + progress.log) }
                     is ProjectDumpEngine.Progress.Failed -> {
-                        _state.update { it.copy(organizerLog = it.organizerLog + LogLine(progress.message, isError = true), organizerRunning = false) }
+                        _state.update {
+                            it.copy(
+                                organizerLog = it.organizerLog + LogLine(progress.message, isError = true),
+                                organizerRunning = false, organizerPhase = OrganizerPhase.FAILED
+                            )
+                        }
                         _snackbar.emit(progress.message)
                     }
                     ProjectDumpEngine.Progress.Done -> {
-                        _state.update { it.copy(organizerRunning = false) }
+                        val fileCount = _state.value.organizerLog.count { !it.isError && it.text.startsWith("Wrote ") }
+                        _state.update {
+                            it.copy(
+                                organizerRunning = false, organizerPhase = OrganizerPhase.DONE,
+                                organizerResultSummary = "Organized $fileCount file${if (fileCount == 1) "" else "s"} into the active project."
+                            )
+                        }
                         refreshWorkspace()
-                        _snackbar.emit("Project organized — check the Workspace tab.")
                     }
                 }
             }

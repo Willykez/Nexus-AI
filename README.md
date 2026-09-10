@@ -12,6 +12,20 @@ Jetpack Compose Android app. "Nexus Forge" is a placeholder name — rename the
   blocks with a macOS-style traffic-light header + pill "Copy" button, an asymmetric
   "chat-tail" shape on user bubbles, and a 2×2 suggestion-card grid for the empty chat state.
 
+- **Edge-to-edge, seamless chrome** (`MainActivity.kt`): status bar and navigation bar draw the
+  same flat background color as the rest of the app instead of a separate black strip; the
+  TopAppBar's container color matches the screen background exactly so there's no visible seam.
+- **Back navigation that behaves like an app, not a stack of dead ends**: any non-Chat tab goes
+  back to Chat on the first press; Chat itself needs a second press within 2 seconds to actually
+  exit (with a snackbar confirming), so a stray back tap never kills the app mid-conversation.
+- **Streaming that shows its work without overwhelming the screen**: a rotating "thinking" phrase
+  + typing-dots indicator before the first token arrives, and — while a code block is still being
+  written — a capped-height, auto-scrolling "live tail" view instead of an ever-growing wall of
+  text, which snaps to the normal full-size code block the moment it's done.
+- **A genuinely useful Organizer screen**: phase-aware UI (thinking → writing → done/failed) with
+  a paste-from-clipboard shortcut, a character counter, per-file status rows, and a success
+  banner with a one-tap jump to the Workspace tab.
+
 ## What got unified
 
 - **Per-conversation projects, not one shared global workspace** (`data/ProjectStore.kt`,

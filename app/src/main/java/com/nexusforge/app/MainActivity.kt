@@ -1,7 +1,9 @@
 package com.nexusforge.app
 
+import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
@@ -19,7 +20,6 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -33,12 +33,16 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -56,15 +60,23 @@ import com.nexusforge.app.ui.screens.SettingsScreen
 import com.nexusforge.app.ui.screens.WorkspaceScreen
 import com.nexusforge.app.ui.theme.NexusForgeTheme
 import com.nexusforge.app.viewmodel.AppViewModel
+import kotlinx.coroutines.launch
 
 /** Width, in dp, past which we treat the device as wide enough for a side-by-side layout. */
 private const val WIDE_LAYOUT_BREAKPOINT_DP = 840
+
+/** Two back-presses within this window on the Chat tab exits the app. */
+private const val EXIT_CONFIRM_WINDOW_MS = 2000L
 
 class MainActivity : ComponentActivity() {
     private val viewModel: AppViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // True edge-to-edge: content (and TopAppBar/NavigationBar's own background) draws under
+        // the system bars instead of the window auto-resizing around a separate black status-bar
+        // strip. This is also what makes Modifier.imePadding() below do real work.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             val state by viewModel.state.collectAsState()
             val useDarkTheme = when (state.settings?.themeMode ?: ThemeMode.SYSTEM) {
@@ -74,7 +86,9 @@ class MainActivity : ComponentActivity() {
             }
             val view = LocalView.current
             SideEffect {
-                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !useDarkTheme
+                val controller = WindowCompat.getInsetsController(window, view)
+                controller.isAppearanceLightStatusBars = !useDarkTheme
+                controller.isAppearanceLightNavigationBars = !useDarkTheme
             }
             NexusForgeTheme(themeMode = state.settings?.themeMode ?: ThemeMode.SYSTEM) {
                 Surface(color = MaterialTheme.colorScheme.background) {
@@ -91,9 +105,28 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val isWide = LocalConfiguration.current.screenWidthDp >= WIDE_LAYOUT_BREAKPOINT_DP
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         viewModel.snackbar.collect { message -> if (message.isNotBlank()) snackbarHostState.showSnackbar(message) }
+    }
+
+    // Back behavior: any non-Chat tab goes back to Chat first; Chat itself needs a second press
+    // within EXIT_CONFIRM_WINDOW_MS to actually exit, so a stray back tap never kills the app.
+    if (state.currentTab != AppTab.CHAT) {
+        BackHandler { viewModel.selectTab(AppTab.CHAT) }
+    } else {
+        var lastBackPressAt by remember { mutableLongStateOf(0L) }
+        val activity = context as? Activity
+        BackHandler {
+            val now = System.currentTimeMillis()
+            if (now - lastBackPressAt < EXIT_CONFIRM_WINDOW_MS) {
+                activity?.finish()
+            } else {
+                lastBackPressAt = now
+                scope.launch { snackbarHostState.showSnackbar("Press back again to exit") }
+            }
+        }
     }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -112,11 +145,18 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
     )
 
     Scaffold(
-        modifier = Modifier.imePadding(), // keeps the chat input bar above the keyboard instead of getting clipped by it
+        modifier = Modifier.imePadding(), // keeps the chat input bar (and now the message list) above the keyboard
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
+            // containerColor matches the screen background exactly (not the default tonal
+            // "surface" container M3 would otherwise use), so the status bar and the app content
+            // read as one continuous flat color instead of a visible seam.
             TopAppBar(
                 title = { Text("Nexus Forge") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.background
+                ),
                 actions = {
                     if (state.currentTab == AppTab.CHAT) {
                         IconButton(onClick = { viewModel.newChat() }) {
@@ -128,7 +168,7 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
         },
         bottomBar = {
             if (!isWide) {
-                NavigationBar {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
                     tabs.forEach { (tab, icon) ->
                         NavigationBarItem(
                             selected = state.currentTab == tab,
@@ -143,7 +183,7 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
     ) { padding ->
         Row(Modifier.padding(padding).fillMaxSize()) {
             if (isWide) {
-                NavigationRail {
+                NavigationRail(containerColor = MaterialTheme.colorScheme.background) {
                     tabs.forEach { (tab, icon) ->
                         NavigationRailItem(
                             selected = state.currentTab == tab,
@@ -153,7 +193,6 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
                         )
                     }
                 }
-                HorizontalDivider(Modifier.width(1.dp))
             }
 
             if (isWide && state.currentTab == AppTab.CHAT) {
@@ -165,7 +204,6 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
                             onOpenProjectPicker = viewModel::openProjectPicker
                         )
                     }
-                    HorizontalDivider(Modifier.width(1.dp))
                     Row(Modifier.weight(0.42f)) {
                         WorkspaceScreen(
                             state = state,
@@ -195,7 +233,10 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
                             onZip = viewModel::zipWorkspace
                         )
                         AppTab.ORGANIZER -> OrganizerScreen(
-                            log = state.organizerLog, isRunning = state.organizerRunning, onOrganize = viewModel::organizeDump
+                            log = state.organizerLog, phase = state.organizerPhase,
+                            thinkingChars = state.organizerThinkingChars, resultSummary = state.organizerResultSummary,
+                            isRunning = state.organizerRunning,
+                            onOrganize = viewModel::organizeDump, onViewWorkspace = { viewModel.selectTab(AppTab.WORKSPACE) }
                         )
                         AppTab.HISTORY -> HistoryScreen(
                             sessions = state.sessionSummaries, onOpen = viewModel::loadSession, onDelete = viewModel::deleteSession

@@ -1,5 +1,10 @@
 package com.nexusforge.app.ui.markdown
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -9,11 +14,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
@@ -33,7 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.TextAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -50,7 +57,8 @@ import kotlinx.coroutines.delay
  * reads like a person wrote it, or like raw asterisks and backticks sitting on screen.
  */
 private sealed class MdBlock {
-    data class Code(val language: String?, val code: String) : MdBlock()
+    /** [isOpen] means the closing fence hasn't arrived yet — this block is still being written. */
+    data class Code(val language: String?, val code: String, val isOpen: Boolean = false) : MdBlock()
     data class Text(val content: String) : MdBlock()
 }
 
@@ -96,7 +104,7 @@ private fun splitMarkdownBlocks(raw: String): List<MdBlock> {
             codeLines.add(lines[j])
             j++
         }
-        blocks.add(MdBlock.Code(lang, codeLines.joinToString("\n")))
+        blocks.add(MdBlock.Code(lang, codeLines.joinToString("\n"), isOpen = !closed))
         i = if (closed) j + 1 else lines.size
     }
     flush()
@@ -121,15 +129,24 @@ private fun renderInline(line: String, codeBackground: androidx.compose.ui.graph
 }
 
 @Composable
-private fun CodeBlock(language: String?, code: String) {
+private fun CodeBlock(language: String?, code: String, live: Boolean = false) {
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1600); copied = false } }
 
+    // While still being written, cap the height and auto-scroll to the bottom — a live "tail -f"
+    // view of the last few lines rather than an ever-growing wall of text scrolling the whole
+    // screen down. Once the fence closes (or the message finishes), this becomes a normal,
+    // fully-visible code block on the next recomposition.
+    val scrollState = rememberScrollState()
+    LaunchedEffect(code, live) {
+        if (live) scrollState.animateScrollTo(scrollState.maxValue)
+    }
+
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.background,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(1.dp, if (live) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outline),
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
     ) {
         Column {
@@ -146,43 +163,65 @@ private fun CodeBlock(language: String?, code: String) {
                     TrafficDot(Color(0xFFFEBC2E))
                     TrafficDot(Color(0xFF28C840))
                 }
-                Text(
-                    text = (language?.ifBlank { null } ?: "code").uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    letterSpacing = 1.sp,
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Center
-                )
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    modifier = Modifier.clickable {
-                        clipboard.setText(AnnotatedString(code))
-                        copied = true
-                    }
-                ) {
+                if (live) {
                     Row(
-                        Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
-                            contentDescription = "Copy code",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(13.dp)
-                        )
+                        PulsingDot(MaterialTheme.colorScheme.primary)
                         Text(
-                            if (copied) "Copied" else "Copy",
+                            "  Writing " + (language?.ifBlank { null } ?: "code") + "…",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.primary,
+                            letterSpacing = 0.5.sp
                         )
+                    }
+                } else {
+                    Text(
+                        text = (language?.ifBlank { null } ?: "code").uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Center
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier.clickable {
+                            clipboard.setText(AnnotatedString(code))
+                            copied = true
+                        }
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                contentDescription = "Copy code",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                if (copied) "Copied" else "Copy",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
-            Box(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(14.dp)) {
+            Box(
+                modifier = Modifier
+                    .let { if (live) it.heightIn(max = 130.dp) else it }
+                    .verticalScroll(if (live) scrollState else rememberScrollState())
+                    .horizontalScroll(rememberScrollState())
+                    .padding(14.dp)
+            ) {
                 Text(text = code, fontFamily = MonoFamily, style = MaterialTheme.typography.bodyMedium, lineHeight = 20.sp)
             }
         }
@@ -195,13 +234,28 @@ private fun TrafficDot(color: Color) {
 }
 
 @Composable
-fun MarkdownText(raw: String, modifier: Modifier = Modifier) {
+private fun PulsingDot(color: Color) {
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+        label = "alpha"
+    )
+    Surface(
+        color = color.copy(alpha = alpha),
+        shape = androidx.compose.foundation.shape.CircleShape,
+        modifier = Modifier.size(7.dp)
+    ) {}
+}
+
+@Composable
+fun MarkdownText(raw: String, modifier: Modifier = Modifier, isStreaming: Boolean = false) {
     val blocks = remember(raw) { splitMarkdownBlocks(raw) }
     val codeBackground = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
     Column(modifier = modifier) {
         for (block in blocks) {
             when (block) {
-                is MdBlock.Code -> CodeBlock(block.language, block.code)
+                is MdBlock.Code -> CodeBlock(block.language, block.code, live = isStreaming && block.isOpen)
                 is MdBlock.Text -> {
                     SelectionContainer {
                         Column {
