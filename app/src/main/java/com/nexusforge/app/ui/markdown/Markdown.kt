@@ -1,6 +1,8 @@
 package com.nexusforge.app.ui.markdown
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,28 +10,38 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.nexusforge.app.ui.theme.MonoFamily
+import kotlinx.coroutines.delay
 
 /**
  * A hand-rolled Markdown subset: headers, bold/italic/inline code, bullet/numbered lists,
@@ -111,30 +123,75 @@ private fun renderInline(line: String, codeBackground: androidx.compose.ui.graph
 @Composable
 private fun CodeBlock(language: String?, code: String) {
     val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { delay(1600); copied = false } }
+
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.background,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
     ) {
         Column {
+            // macOS-style traffic-light header, matching the reference design's code-block chrome.
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TrafficDot(Color(0xFFFF5F57))
+                    TrafficDot(Color(0xFFFEBC2E))
+                    TrafficDot(Color(0xFF28C840))
+                }
                 Text(
-                    text = language?.ifBlank { null } ?: "code",
+                    text = (language?.ifBlank { null } ?: "code").uppercase(),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Center
                 )
-                IconButton(onClick = { clipboard.setText(AnnotatedString(code)) }) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy code", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.clickable {
+                        clipboard.setText(AnnotatedString(code))
+                        copied = true
+                    }
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                            contentDescription = "Copy code",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            if (copied) "Copied" else "Copy",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
-            Box(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
-                Text(text = code, fontFamily = MonoFamily, style = MaterialTheme.typography.bodyMedium)
+            Box(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(14.dp)) {
+                Text(text = code, fontFamily = MonoFamily, style = MaterialTheme.typography.bodyMedium, lineHeight = 20.sp)
             }
         }
     }
+}
+
+@Composable
+private fun TrafficDot(color: Color) {
+    Surface(color = color, shape = androidx.compose.foundation.shape.CircleShape, modifier = Modifier.size(9.dp)) {}
 }
 
 @Composable

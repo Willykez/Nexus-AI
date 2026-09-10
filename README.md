@@ -6,6 +6,12 @@ nexus-ai-operation-script.md, code-organizer-vision.md), reconciled into a singl
 Jetpack Compose Android app. "Nexus Forge" is a placeholder name — rename the
 `namespace`/`applicationId` in `app/build.gradle.kts` and `strings.xml` freely.
 
+- **Visual design ported from an HTML reference** (`ui/theme/Color.kt`, `ui/markdown/Markdown.kt`):
+  warm orange accent system (`#F97316`/`#FB923C` dark, darker `#EA580C` for light-mode contrast),
+  near-black/near-white surfaces with border-based elevation instead of heavy shadows, code
+  blocks with a macOS-style traffic-light header + pill "Copy" button, an asymmetric
+  "chat-tail" shape on user bubbles, and a 2×2 suggestion-card grid for the empty chat state.
+
 ## What got unified
 
 - **Per-conversation projects, not one shared global workspace** (`data/ProjectStore.kt`,

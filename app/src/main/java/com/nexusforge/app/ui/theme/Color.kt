@@ -2,28 +2,30 @@ package com.nexusforge.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Dark-first palette: a coding tool lives on-screen for long stretches, so it should feel
-// calm and low-glare, with one clear accent for "the agent is doing something".
-val InkBlack = Color(0xFF0B0E14)
-val PanelDark = Color(0xFF141821)
-val PanelDarkElevated = Color(0xFF1B2029)
-val StrokeSubtle = Color(0xFF262C38)
-val TextPrimaryDark = Color(0xFFE9ECF3)
-val TextSecondaryDark = Color(0xFF9BA3B4)
+// Ported from the Aurora reference design: near-black surfaces, one warm accent used sparingly
+// (send button, active states, the "agent is live" signal), borders instead of heavy shadows
+// for elevation.
+val InkBlack = Color(0xFF09090B)
+val PanelDark = Color(0xFF16181D)
+val PanelDarkElevated = Color(0xFF1C1F26)
+val StrokeSubtle = Color(0xFF26282F)
+val TextPrimaryDark = Color(0xFFF4F4F5)
+val TextSecondaryDark = Color(0xFFA1A1AA)
 
-val AccentForge = Color(0xFF5EEAD4) // teal — "running / live" accent
-val AccentAmber = Color(0xFFF5B860) // "attention" accent for the attached-folder mode
-val SuccessGreen = Color(0xFF4ADE80)
-val ErrorRed = Color(0xFFF87171)
+val AccentForge = Color(0xFFF97316) // warm orange — "running / live" accent, matches Aurora's --accent
+val AccentAmber = Color(0xFFFB923C) // lighter companion accent, matches Aurora's --accent2
+val SuccessGreen = Color(0xFF22C55E)
+val ErrorRed = Color(0xFFEF4444)
 
-val SurfaceLight = Color(0xFFF7F8FB)
+val SurfaceLight = Color(0xFFFAFAFA)
 val PanelLight = Color(0xFFFFFFFF)
-val PanelLightElevated = Color(0xFFEDEFF5)
-val StrokeSubtleLight = Color(0xFFDBDFE8)
-val TextPrimaryLight = Color(0xFF14161C)
-val TextSecondaryLight = Color(0xFF5B6172)
+val PanelLightElevated = Color(0xFFF0F0F2)
+val StrokeSubtleLight = Color(0xFFE4E4E7)
+val TextPrimaryLight = Color(0xFF18181B)
+val TextSecondaryLight = Color(0xFF52525B)
 
-// The dark accent teal is too low-contrast as a filled-button color on a white background —
-// this is the same hue, darkened, used as `primary` in the light scheme specifically.
-val AccentForgeOnLight = Color(0xFF0E8C7C)
-val AccentAmberOnLight = Color(0xFFB9791E)
+// The dark accent orange is already reasonably strong as a filled-button color on white, but a
+// touch darker reads better for contrast/accessibility on light surfaces (mirrors Aurora's
+// light-theme --accent: #ea580c vs dark's #f97316).
+val AccentForgeOnLight = Color(0xFFEA580C)
+val AccentAmberOnLight = Color(0xFFC2410C)

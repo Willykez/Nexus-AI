@@ -33,7 +33,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.nexusforge.app.data.ToolChip
 import com.nexusforge.app.data.ToolStatus
-import com.nexusforge.app.ui.theme.AccentForge
 import com.nexusforge.app.ui.theme.ErrorRed
 import com.nexusforge.app.ui.theme.SuccessGreen
 
@@ -61,7 +60,7 @@ private fun labelFor(toolName: String) = when (toolName) {
 @Composable
 fun ActionCard(chip: ToolChip, modifier: Modifier = Modifier) {
     val borderColor = when (chip.status) {
-        ToolStatus.RUNNING -> AccentForge
+        ToolStatus.RUNNING -> MaterialTheme.colorScheme.primary
         ToolStatus.DONE -> SuccessGreen
         ToolStatus.ERROR -> ErrorRed
     }

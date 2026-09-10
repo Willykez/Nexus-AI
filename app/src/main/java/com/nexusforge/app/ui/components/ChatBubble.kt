@@ -52,8 +52,9 @@ fun ChatBubble(
 private fun UserBubble(text: String, modifier: Modifier) {
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Surface(
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(topStart = 6.dp, topEnd = 18.dp, bottomEnd = 18.dp, bottomStart = 18.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier.fillMaxWidth(0.86f)
         ) {
             SelectionContainer {
