@@ -81,8 +81,22 @@ class AiClient(private val config: ProviderConfig) {
         awaitClose { eventSource.cancel() }
     }
 
+    /**
+     * Closing an OkHttp connection pool can perform a real, blocking network write (the TLS
+     * close_notify) on whatever thread calls it. Every caller of this — including the
+     * `finally` block after an agent turn, and the Organizer's cleanup — runs on
+     * viewModelScope's Main dispatcher, so evicting synchronously there is a guaranteed
+     * NetworkOnMainThreadException (Android enforces this at the OS level for targetSdk ≥ 11;
+     * it's not just a StrictMode warning). Running the actual eviction on a throwaway thread
+     * makes close() safe to call from anywhere, including inside a cancelled coroutine's
+     * `finally` block, without every call site needing to remember withContext(Dispatchers.IO).
+     */
     fun close() {
-        client.dispatcher.cancelAll()
-        client.connectionPool.evictAll()
+        Thread {
+            runCatching {
+                client.dispatcher.cancelAll()
+                client.connectionPool.evictAll()
+            }
+        }.start()
     }
 }
