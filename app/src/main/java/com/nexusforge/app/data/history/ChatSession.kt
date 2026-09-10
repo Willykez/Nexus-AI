@@ -23,6 +23,7 @@ data class ChatSession(
     val title: String,
     val providerLabel: String,
     val projectLabel: String,
+    val projectId: String? = null,
     val createdAt: Long,
     val updatedAt: Long,
     val apiMessages: List<ChatMessage>,

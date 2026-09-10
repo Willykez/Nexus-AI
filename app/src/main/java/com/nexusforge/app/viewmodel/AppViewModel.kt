@@ -6,15 +6,18 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nexusforge.app.data.AiClient
 import com.nexusforge.app.data.AppSettings
+import com.nexusforge.app.data.AppTab
+import com.nexusforge.app.data.CapabilityFlags
 import com.nexusforge.app.data.ChatMessage
 import com.nexusforge.app.data.ChatRequest
 import com.nexusforge.app.data.ChatResponseChunk
-import com.nexusforge.app.data.CapabilityFlags
 import com.nexusforge.app.data.FileNode
 import com.nexusforge.app.data.FunctionCall
+import com.nexusforge.app.data.Project
 import com.nexusforge.app.data.ProjectSource
-import com.nexusforge.app.data.ProviderConfig
+import com.nexusforge.app.data.ProjectStore
 import com.nexusforge.app.data.SettingsStore
+import com.nexusforge.app.data.ThemeMode
 import com.nexusforge.app.data.ToolCall
 import com.nexusforge.app.data.ToolChip
 import com.nexusforge.app.data.ToolRegistry
@@ -40,8 +43,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
@@ -51,7 +52,12 @@ private const val MAX_AGENT_ROUNDS = 8
 data class AppUiState(
     val settingsLoaded: Boolean = false,
     val settings: AppSettings? = null,
-    val currentTab: com.nexusforge.app.data.AppTab = com.nexusforge.app.data.AppTab.CHAT,
+    val currentTab: AppTab = AppTab.CHAT,
+
+    // project
+    val activeProject: Project? = null,
+    val projects: List<Project> = emptyList(),
+    val showProjectPicker: Boolean = false,
 
     // chat
     val sessionId: String = UUID.randomUUID().toString(),
@@ -80,6 +86,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val settingsStore = SettingsStore(application)
     private val historyStore = ChatHistoryStore(application)
+    private val projectStore = ProjectStore(application)
     private val lenientJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
     private val _state = MutableStateFlow(AppUiState())
@@ -88,50 +95,138 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _snackbar = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbar: SharedFlow<String> = _snackbar.asSharedFlow()
 
-    private var workspaceEngine: WorkspaceEngine = SandboxWorkspaceEngine(application)
+    private var workspaceEngine: WorkspaceEngine? = null
     private var apiMessages = mutableListOf<ChatMessage>()
     private var agentJob: Job? = null
 
     init {
         viewModelScope.launch {
             settingsStore.settingsFlow.collect { settings ->
-                rebuildWorkspaceEngine(settings.projectSource)
                 _state.update { it.copy(settingsLoaded = true, settings = settings) }
-                refreshWorkspace()
             }
         }
+        viewModelScope.launch { initializeActiveProject() }
         refreshSessions()
     }
 
-    private fun rebuildWorkspaceEngine(source: ProjectSource) {
-        workspaceEngine = when (source) {
-            is ProjectSource.Sandbox -> SandboxWorkspaceEngine(getApplication())
-            is ProjectSource.AttachedFolder -> RealFolderWorkspaceEngine(
-                getApplication(), Uri.parse(source.treeUri), source.displayName
-            )
+    private suspend fun initializeActiveProject() {
+        val projects = projectStore.list()
+        _state.update { it.copy(projects = projects) }
+        if (projects.isEmpty()) {
+            val created = projectStore.createSandbox("My Sandbox")
+            selectProject(created)
+            return
         }
+        // Wait one tick for settingsFlow's first emission so lastActiveProjectId is available.
+        val lastId = _state.value.settings?.lastActiveProjectId
+        val target = projects.find { it.id == lastId } ?: projects.first()
+        selectProject(target, persist = false)
+    }
+
+    private fun engineFor(source: ProjectSource): WorkspaceEngine = when (source) {
+        is ProjectSource.Sandbox -> SandboxWorkspaceEngine(getApplication(), source.projectId)
+        is ProjectSource.AttachedFolder -> RealFolderWorkspaceEngine(getApplication(), Uri.parse(source.treeUri), source.displayName)
     }
 
     // ---------- Navigation ----------
 
-    fun selectTab(tab: com.nexusforge.app.data.AppTab) = _state.update { it.copy(currentTab = tab) }
+    fun selectTab(tab: AppTab) = _state.update { it.copy(currentTab = tab) }
+
+    // ---------- Projects ----------
+
+    fun openProjectPicker() {
+        viewModelScope.launch { _state.update { it.copy(projects = projectStore.list(), showProjectPicker = true) } }
+    }
+
+    fun dismissProjectPicker() = _state.update { it.copy(showProjectPicker = false) }
+
+    fun selectProject(project: Project, persist: Boolean = true) {
+        workspaceEngine = engineFor(project.source)
+        _state.update {
+            it.copy(
+                activeProject = project, showProjectPicker = false,
+                selectedFile = null, selectedFileContent = "", highlightedPath = null
+            )
+        }
+        refreshWorkspace()
+        if (persist) {
+            viewModelScope.launch {
+                settingsStore.saveLastActiveProject(project.id)
+                projectStore.touch(project.id)
+                _state.update { it.copy(projects = projectStore.list()) }
+            }
+        }
+    }
+
+    fun createSandboxProject(name: String) {
+        viewModelScope.launch {
+            val project = projectStore.createSandbox(name)
+            selectProject(project)
+        }
+    }
+
+    fun attachFolderAsProject(treeUri: Uri, displayName: String) {
+        val resolver = getApplication<Application>().contentResolver
+        runCatching {
+            resolver.takePersistableUriPermission(
+                treeUri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+        viewModelScope.launch {
+            val project = projectStore.attachFolder(treeUri.toString(), displayName)
+            selectProject(project)
+            _snackbar.emit("Attached folder: $displayName")
+        }
+    }
+
+    fun renameProject(project: Project, newName: String) {
+        viewModelScope.launch {
+            projectStore.rename(project.id, newName)
+            val projects = projectStore.list()
+            _state.update { it.copy(projects = projects) }
+            if (_state.value.activeProject?.id == project.id) {
+                _state.update { it.copy(activeProject = projects.find { p -> p.id == project.id }) }
+            }
+        }
+    }
+
+    fun deleteProject(project: Project) {
+        viewModelScope.launch {
+            projectStore.delete(project.id)
+            val projects = projectStore.list()
+            _state.update { it.copy(projects = projects) }
+            if (_state.value.activeProject?.id == project.id) {
+                val replacement = projects.firstOrNull() ?: projectStore.createSandbox("My Sandbox")
+                selectProject(replacement)
+            }
+            _snackbar.emit("Deleted \"${project.name}\"")
+        }
+    }
 
     // ---------- Chat ----------
 
     fun sendMessage(rawText: String) {
         val prompt = rawText.trim()
         if (prompt.isBlank() || _state.value.isAgentRunning) return
+        val engine = workspaceEngine
+        val project = _state.value.activeProject
+        if (engine == null || project == null) {
+            viewModelScope.launch { _snackbar.emit("Pick a project first.") }
+            openProjectPicker()
+            return
+        }
 
         if (apiMessages.isEmpty()) {
             val settings = _state.value.settings
             apiMessages.add(ChatMessage(role = "system", content = ToolRegistry.systemPrompt(
-                settings?.capabilities ?: CapabilityFlags(), settings?.projectSource ?: ProjectSource.Sandbox
+                settings?.capabilities ?: CapabilityFlags(), project.source
             )))
         }
         apiMessages.add(ChatMessage(role = "user", content = prompt))
         _state.update { it.copy(messages = it.messages + UiChatMessage(role = "user", text = prompt), error = null) }
 
-        agentJob = viewModelScope.launch { runAgentLoop() }
+        agentJob = viewModelScope.launch { runAgentLoop(engine) }
     }
 
     fun stopAgent() {
@@ -161,8 +256,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     toolChips = pm.toolSummaries.map { summary -> ToolChip(toolName = summary, status = ToolStatus.DONE) }
                 )
             }
+            val project = session.projectId?.let { projectStore.get(it) }
+            if (project != null && project.id != _state.value.activeProject?.id) {
+                selectProject(project, persist = false)
+            } else if (session.projectId != null && project == null) {
+                _snackbar.emit("This conversation's original project is gone — staying on the current one.")
+            }
             _state.update {
-                it.copy(sessionId = session.id, messages = restored, currentTab = com.nexusforge.app.data.AppTab.CHAT)
+                it.copy(sessionId = session.id, messages = restored, currentTab = AppTab.CHAT)
             }
         }
     }
@@ -186,16 +287,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val firstUser = current.messages.firstOrNull { it.role == "user" }?.text
         if (firstUser == null) return // nothing to save
         val settings = current.settings
+        val project = current.activeProject
         viewModelScope.launch {
             historyStore.saveSession(
                 ChatSession(
                     id = current.sessionId,
                     title = ChatHistoryStore.titleFrom(firstUser),
                     providerLabel = settings?.let { SettingsStore.providerLabel(it.provider.baseUrl) } ?: "—",
-                    projectLabel = when (val s = settings?.projectSource) {
-                        is ProjectSource.AttachedFolder -> s.displayName
-                        else -> "Sandbox"
-                    },
+                    projectLabel = project?.name ?: "Unknown project",
+                    projectId = project?.id,
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis(),
                     apiMessages = apiMessages.toList(),
@@ -211,7 +311,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun runAgentLoop() {
+    private suspend fun runAgentLoop(engine: WorkspaceEngine) {
         val settings = _state.value.settings ?: return
         val client = AiClient(settings.provider)
         _state.update { it.copy(isAgentRunning = true, statusLabel = "Thinking…") }
@@ -288,7 +388,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 for (call in toolCalls) {
-                    val result = executeTool(call, settings.capabilities)
+                    val result = executeTool(engine, call, settings.capabilities)
                     apiMessages.add(ChatMessage(role = "tool", content = result, toolCallId = call.id, name = call.function.name))
                     updateMessage(assistant.id) { msg ->
                         msg.copy(toolChips = msg.toolChips.map { chip ->
@@ -316,27 +416,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun executeTool(call: ToolCall, flags: CapabilityFlags): String {
+    private suspend fun executeTool(engine: WorkspaceEngine, call: ToolCall, flags: CapabilityFlags): String {
         val args = runCatching { JSONObject(call.function.arguments.ifBlank { "{}" }) }.getOrNull()
         return try {
             when (call.function.name) {
                 ToolRegistry.READ_FILE -> {
                     if (!flags.fileReadWriteEnabled) return "Error: file access is disabled in Settings capability toggles"
-                    workspaceEngine.readFile(args?.optString("path").orEmpty())
+                    engine.readFile(args?.optString("path").orEmpty())
                 }
                 ToolRegistry.WRITE_FILE -> {
                     if (!flags.fileReadWriteEnabled) return "Error: file access is disabled in Settings capability toggles"
                     val path = args?.optString("path").orEmpty()
                     val content = args?.optString("content").orEmpty()
-                    val result = workspaceEngine.writeFile(path, content)
+                    val result = engine.writeFile(path, content)
                     _state.update { it.copy(highlightedPath = path) }
                     result
                 }
-                ToolRegistry.LIST_FILES -> workspaceEngine.listFilesAsText(args?.optString("path").orEmpty())
+                ToolRegistry.LIST_FILES -> engine.listFilesAsText(args?.optString("path").orEmpty())
                 ToolRegistry.ZIP_PROJECT -> {
                     if (!flags.zipEnabled) return "Error: ZIP export is disabled in Settings capability toggles"
                     val name = args?.optString("archiveName")?.ifBlank { null } ?: "workspace"
-                    val zip = workspaceEngine.zipProject(name)
+                    val zip = engine.zipProject(name)
                     _state.update { it.copy(lastExportedZip = zip.absolutePath) }
                     "Archive created at ${zip.name} (${zip.length()} bytes)"
                 }
@@ -365,16 +465,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ---------- Workspace ----------
 
     fun refreshWorkspace() {
+        val engine = workspaceEngine ?: return
         viewModelScope.launch {
-            val tree = runCatching { workspaceEngine.fileTree() }.getOrNull()
-            val stats = runCatching { workspaceEngine.stats() }.getOrNull()
+            val tree = runCatching { engine.fileTree() }.getOrNull()
+            val stats = runCatching { engine.stats() }.getOrNull()
             if (tree != null) _state.update { it.copy(fileTree = tree, workspaceStats = stats) }
         }
     }
 
     fun openFile(path: String) {
+        val engine = workspaceEngine ?: return
         viewModelScope.launch {
-            val content = runCatching { workspaceEngine.readFile(path) }.getOrElse { "Error reading file: ${it.message}" }
+            val content = runCatching { engine.readFile(path) }.getOrElse { "Error reading file: ${it.message}" }
             _state.update { it.copy(selectedFile = path, selectedFileContent = content) }
         }
     }
@@ -384,25 +486,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun renameFile(path: String, newName: String) {
+        val engine = workspaceEngine ?: return
         viewModelScope.launch {
-            val result = runCatching { workspaceEngine.renameFile(path, newName) }.getOrElse { "Error: ${it.message}" }
+            val result = runCatching { engine.renameFile(path, newName) }.getOrElse { "Error: ${it.message}" }
             _snackbar.emit(result)
             refreshWorkspace()
         }
     }
 
     fun deleteFile(path: String) {
+        val engine = workspaceEngine ?: return
         viewModelScope.launch {
-            val result = runCatching { workspaceEngine.deleteFile(path) }.getOrElse { "Error: ${it.message}" }
+            val result = runCatching { engine.deleteFile(path) }.getOrElse { "Error: ${it.message}" }
             _snackbar.emit(result)
             refreshWorkspace()
         }
     }
 
     fun zipWorkspace() {
+        val engine = workspaceEngine ?: return
         viewModelScope.launch {
             try {
-                val zip = workspaceEngine.zipProject("export_${System.currentTimeMillis()}")
+                val zip = engine.zipProject("export_${System.currentTimeMillis()}")
                 _state.update { it.copy(lastExportedZip = zip.absolutePath) }
                 _snackbar.emit("ZIP ready: ${zip.name}")
             } catch (e: Exception) {
@@ -415,10 +520,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun organizeDump(rawDump: String) {
         val settings = _state.value.settings ?: return
+        val engine = workspaceEngine ?: return
         if (rawDump.isBlank() || _state.value.organizerRunning) return
         _state.update { it.copy(organizerRunning = true, organizerLog = emptyList()) }
         viewModelScope.launch {
-            ProjectDumpEngine(settings.provider).organize(rawDump, workspaceEngine).collect { progress ->
+            ProjectDumpEngine(settings.provider).organize(rawDump, engine).collect { progress ->
                 when (progress) {
                     is ProjectDumpEngine.Progress.Thinking ->
                         _state.update { it.copy(organizerLog = listOf(LogLine("Reading your paste… (${progress.charsReceived} chars so far)"))) }
@@ -461,29 +567,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { settingsStore.saveGenerationParams(temperature, maxTokens) }
     }
 
-    fun setThemeMode(mode: com.nexusforge.app.data.ThemeMode) {
+    fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch { settingsStore.saveThemeMode(mode) }
-    }
-
-    fun switchToSandbox() {
-        viewModelScope.launch {
-            settingsStore.setProjectSourceSandbox()
-            _snackbar.emit("Switched to the private sandbox")
-        }
-    }
-
-    fun attachRealFolder(treeUri: Uri, displayName: String) {
-        val resolver = getApplication<Application>().contentResolver
-        runCatching {
-            resolver.takePersistableUriPermission(
-                treeUri,
-                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-        }
-        viewModelScope.launch {
-            settingsStore.setProjectSourceAttached(treeUri.toString(), displayName)
-            _snackbar.emit("Attached folder: $displayName")
-        }
     }
 
     fun currentZipFile(): File? = _state.value.lastExportedZip?.let { File(it) }

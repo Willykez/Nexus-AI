@@ -1,7 +1,6 @@
 package com.nexusforge.app.ui.screens
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,14 +9,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -28,10 +29,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.nexusforge.app.data.AppSettings
+import com.nexusforge.app.data.Project
 import com.nexusforge.app.data.ProjectSource
 import com.nexusforge.app.data.SettingsStore
 import com.nexusforge.app.data.ThemeMode
@@ -39,15 +40,14 @@ import com.nexusforge.app.data.ThemeMode
 @Composable
 fun SettingsScreen(
     settings: AppSettings?,
+    activeProject: Project?,
     onSaveProvider: (String, String, String) -> Unit,
     onSaveCapabilities: (Boolean, Boolean) -> Unit,
     onSaveGeneration: (Float, Int) -> Unit,
-    onSwitchToSandbox: () -> Unit,
-    onAttachFolder: (android.net.Uri, String) -> Unit,
+    onOpenProjectPicker: () -> Unit,
     onSetThemeMode: (ThemeMode) -> Unit
 ) {
     if (settings == null) return
-    val context = LocalContext.current
 
     var baseUrl by remember(settings.provider.baseUrl) { mutableStateOf(settings.provider.baseUrl) }
     var apiKey by remember { mutableStateOf("") } // never pre-fill the decrypted key back into a text field
@@ -56,13 +56,6 @@ fun SettingsScreen(
     var zipEnabled by remember(settings.capabilities) { mutableStateOf(settings.capabilities.zipEnabled) }
     var temperature by remember(settings.temperature) { mutableStateOf(settings.temperature) }
     var maxTokens by remember(settings.maxOutputTokens) { mutableStateOf(settings.maxOutputTokens.toString()) }
-
-    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            val name = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)?.name ?: "Attached folder"
-            onAttachFolder(uri, name)
-        }
-    }
 
     LazyColumn(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item {
@@ -77,29 +70,33 @@ fun SettingsScreen(
         item { HorizontalDivider() }
 
         item {
-            Text("Project source", style = MaterialTheme.typography.titleMedium)
+            Text("Project", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 4.dp))
             Text(
-                "Sandbox is a private space to build from scratch — nothing outside it can ever be touched. " +
-                    "Attaching a real folder lets the agent edit an actual project on your device, in place.",
+                "Each conversation is pointed at a project — a private sandbox to build from scratch, or a real " +
+                    "folder on your device the agent edits in place. Switch or manage projects from the picker.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                modifier = Modifier.padding(bottom = 8.dp)
             )
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                RadioButton(selected = settings.projectSource is ProjectSource.Sandbox, onClick = onSwitchToSandbox)
-                Text("Private sandbox", modifier = Modifier.padding(start = 4.dp))
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                RadioButton(selected = settings.projectSource is ProjectSource.AttachedFolder, onClick = { folderPicker.launch(null) })
-                Column(Modifier.padding(start = 4.dp)) {
-                    Text("Attach a real folder")
-                    (settings.projectSource as? ProjectSource.AttachedFolder)?.let {
-                        Text(it.displayName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onOpenProjectPicker).padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f)) {
+                    Text(activeProject?.name ?: "No project selected", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        when (activeProject?.source) {
+                            is ProjectSource.AttachedFolder -> "Attached folder"
+                            is ProjectSource.Sandbox -> "Sandbox"
+                            else -> "Tap to choose a project"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-            }
-            OutlinedButton(onClick = { folderPicker.launch(null) }, modifier = Modifier.padding(top = 6.dp)) {
-                Text("Choose folder…")
+                Icon(Icons.Default.ChevronRight, contentDescription = "Switch project", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 

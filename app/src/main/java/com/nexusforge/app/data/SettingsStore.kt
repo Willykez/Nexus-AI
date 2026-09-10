@@ -23,14 +23,16 @@ data class AppSettings(
     val capabilities: CapabilityFlags,
     val temperature: Float,
     val maxOutputTokens: Int,
-    val projectSource: ProjectSource,
-    val themeMode: ThemeMode
+    val themeMode: ThemeMode,
+    /** Which Project (see ProjectStore) to reopen on cold start — not a workspace itself. */
+    val lastActiveProjectId: String?
 )
 
 /**
  * Single source of truth for everything that survives app restart except chat sessions
- * themselves (see ChatHistoryStore). The API key is Keystore-encrypted at rest; re-saving other
- * fields with a blank key field keeps the previously saved key rather than wiping it.
+ * (ChatHistoryStore) and projects/workspaces themselves (ProjectStore). The API key is
+ * Keystore-encrypted at rest; re-saving other fields with a blank key field keeps the
+ * previously saved key rather than wiping it.
  */
 class SettingsStore(private val context: Context) {
 
@@ -42,21 +44,11 @@ class SettingsStore(private val context: Context) {
         val zipEnabled = booleanPreferencesKey("zip_enabled")
         val temperature = stringPreferencesKey("temperature")
         val maxTokens = stringPreferencesKey("max_tokens")
-        val projectMode = stringPreferencesKey("project_mode") // "sandbox" | "attached"
-        val attachedTreeUri = stringPreferencesKey("attached_tree_uri")
-        val attachedDisplayName = stringPreferencesKey("attached_display_name")
         val themeMode = stringPreferencesKey("theme_mode") // "system" | "light" | "dark"
+        val lastActiveProjectId = stringPreferencesKey("last_active_project_id")
     }
 
     val settingsFlow: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
-        val mode = prefs[Keys.projectMode] ?: "sandbox"
-        val source = if (mode == "attached" && prefs[Keys.attachedTreeUri] != null) {
-            ProjectSource.AttachedFolder(
-                treeUri = prefs[Keys.attachedTreeUri]!!,
-                displayName = prefs[Keys.attachedDisplayName] ?: "Attached folder"
-            )
-        } else ProjectSource.Sandbox
-
         AppSettings(
             provider = ProviderConfig(
                 baseUrl = prefs[Keys.baseUrl] ?: "https://api.openai.com/v1",
@@ -69,12 +61,12 @@ class SettingsStore(private val context: Context) {
             ),
             temperature = prefs[Keys.temperature]?.toFloatOrNull() ?: 0.2f,
             maxOutputTokens = prefs[Keys.maxTokens]?.toIntOrNull() ?: 8192,
-            projectSource = source,
             themeMode = when (prefs[Keys.themeMode]) {
                 "light" -> ThemeMode.LIGHT
                 "dark" -> ThemeMode.DARK
                 else -> ThemeMode.SYSTEM
-            }
+            },
+            lastActiveProjectId = prefs[Keys.lastActiveProjectId]
         )
     }
 
@@ -110,16 +102,8 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    suspend fun setProjectSourceSandbox() {
-        context.settingsDataStore.edit { prefs -> prefs[Keys.projectMode] = "sandbox" }
-    }
-
-    suspend fun setProjectSourceAttached(treeUri: String, displayName: String) {
-        context.settingsDataStore.edit { prefs ->
-            prefs[Keys.projectMode] = "attached"
-            prefs[Keys.attachedTreeUri] = treeUri
-            prefs[Keys.attachedDisplayName] = displayName
-        }
+    suspend fun saveLastActiveProject(id: String) {
+        context.settingsDataStore.edit { prefs -> prefs[Keys.lastActiveProjectId] = id }
     }
 
     // ---------- Keystore AES/GCM encryption for the API key ----------

@@ -8,11 +8,14 @@ Jetpack Compose Android app. "Nexus Forge" is a placeholder name — rename the
 
 ## What got unified
 
-- **Two project sources behind one interface** (`data/workspace/WorkspaceEngine.kt`):
-  a private **Sandbox** (`SandboxWorkspaceEngine`, filesDir-only, canonical-path-checked)
-  and a real **attached folder** via Storage Access Framework (`RealFolderWorkspaceEngine`,
-  `DocumentFile`-based). The agent loop, the Organizer, and the Workspace screen all call
-  the same interface — they don't know or care which one is active. Switch source in Settings.
+- **Per-conversation projects, not one shared global workspace** (`data/ProjectStore.kt`,
+  `ui/components/ProjectPickerSheet.kt`): every chat is pointed at an explicit **Project** — a
+  private Sandbox (`SandboxWorkspaceEngine`, now scoped at `filesDir/workspaces/<projectId>` so
+  each sandbox project is isolated) or a real attached folder via Storage Access Framework
+  (`RealFolderWorkspaceEngine`). A picker modeled on GitHub Copilot's repo selector — search,
+  list, create/attach, rename/delete — lets you switch or manage projects from a chip in the
+  chat input bar or from Settings, instead of every conversation silently piling files into one
+  folder.
 - **One agent loop** (`viewmodel/AppViewModel.kt`) drives both native tool use in Chat *and*
   the paste-a-whole-project Organizer mode — the Organizer just calls the same
   `WorkspaceEngine.writeFile` the chat agent's `write_file` tool calls.

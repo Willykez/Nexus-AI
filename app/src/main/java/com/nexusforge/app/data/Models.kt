@@ -131,14 +131,33 @@ enum class AppTab(val label: String) {
     SETTINGS("Settings")
 }
 
-/** Which underlying file system the active project talks to. Chosen in Settings. */
+/** Which underlying file system a project talks to. Chosen per-project via the project picker. */
+@Serializable
 sealed class ProjectSource {
-    /** A private, disposable sandbox at filesDir/workspace. Safe for the model to run wild in. */
-    data object Sandbox : ProjectSource()
+    /** A private, disposable sandbox at filesDir/workspaces/<projectId>. Each project gets its own. */
+    @Serializable
+    @SerialName("sandbox")
+    data class Sandbox(val projectId: String) : ProjectSource()
 
     /** A real, user-picked folder (via SAF) that the agent edits in place. */
+    @Serializable
+    @SerialName("attached")
     data class AttachedFolder(val treeUri: String, val displayName: String) : ProjectSource()
 }
+
+/**
+ * A named workspace a conversation can be pointed at — the thing the project picker lets you
+ * choose, so different chats don't silently pile files into the same folder. Persisted by
+ * ProjectStore.
+ */
+@Serializable
+data class Project(
+    val id: String,
+    val name: String,
+    val source: ProjectSource,
+    val createdAt: Long,
+    val lastUsedAt: Long
+)
 
 data class ProviderConfig(
     val baseUrl: String = "https://api.openai.com/v1",

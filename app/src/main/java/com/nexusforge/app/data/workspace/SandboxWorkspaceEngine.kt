@@ -16,10 +16,10 @@ import java.util.zip.ZipOutputStream
  * run against a Sandbox project can ever touch, regardless of what path a model response asks
  * for — every path is canonicalized and checked against the root before any I/O happens.
  */
-class SandboxWorkspaceEngine(context: Context) : WorkspaceEngine {
+class SandboxWorkspaceEngine(context: Context, projectId: String) : WorkspaceEngine {
 
-    private val root = File(context.filesDir, "workspace").apply { mkdirs() }
-    private val exportDir = File(context.filesDir, "exports").apply { mkdirs() }
+    private val root = File(context.filesDir, "workspaces/$projectId").apply { mkdirs() }
+    private val exportDir = File(context.filesDir, "exports/$projectId").apply { mkdirs() }
 
     override fun locationLabel(): String = root.absolutePath
 

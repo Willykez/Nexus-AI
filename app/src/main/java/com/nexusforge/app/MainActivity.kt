@@ -2,11 +2,14 @@ package com.nexusforge.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
@@ -38,9 +41,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.documentfile.provider.DocumentFile
 import com.nexusforge.app.data.AppTab
+import com.nexusforge.app.data.ThemeMode
+import com.nexusforge.app.ui.components.ProjectPickerSheet
 import com.nexusforge.app.ui.screens.ChatScreen
 import com.nexusforge.app.ui.screens.HistoryScreen
 import com.nexusforge.app.ui.screens.OrganizerScreen
@@ -59,16 +67,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val state by viewModel.state.collectAsState()
-            val useDarkTheme = when (state.settings?.themeMode ?: com.nexusforge.app.data.ThemeMode.SYSTEM) {
-                com.nexusforge.app.data.ThemeMode.SYSTEM -> isSystemInDarkTheme()
-                com.nexusforge.app.data.ThemeMode.LIGHT -> false
-                com.nexusforge.app.data.ThemeMode.DARK -> true
+            val useDarkTheme = when (state.settings?.themeMode ?: ThemeMode.SYSTEM) {
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
             }
-            val view = androidx.compose.ui.platform.LocalView.current
+            val view = LocalView.current
             SideEffect {
                 WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !useDarkTheme
             }
-            NexusForgeTheme(themeMode = state.settings?.themeMode ?: com.nexusforge.app.data.ThemeMode.SYSTEM) {
+            NexusForgeTheme(themeMode = state.settings?.themeMode ?: ThemeMode.SYSTEM) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     NexusForgeApp(viewModel)
                 }
@@ -82,9 +90,17 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val isWide = LocalConfiguration.current.screenWidthDp >= WIDE_LAYOUT_BREAKPOINT_DP
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
-        viewModel.snackbar.collect { message -> snackbarHostState.showSnackbar(message) }
+        viewModel.snackbar.collect { message -> if (message.isNotBlank()) snackbarHostState.showSnackbar(message) }
+    }
+
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            val name = DocumentFile.fromTreeUri(context, uri)?.name ?: "Attached folder"
+            viewModel.attachFolderAsProject(uri, name)
+        }
     }
 
     val tabs = listOf(
@@ -96,6 +112,7 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
     )
 
     Scaffold(
+        modifier = Modifier.imePadding(), // keeps the chat input bar above the keyboard instead of getting clipped by it
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -143,7 +160,10 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
                 // Tablet: chat and the live file tree side by side, so writes are visible as they happen.
                 Row(Modifier.fillMaxSize()) {
                     Row(Modifier.weight(0.58f)) {
-                        ChatScreen(state = state, onSend = viewModel::sendMessage, onStop = viewModel::stopAgent)
+                        ChatScreen(
+                            state = state, onSend = viewModel::sendMessage, onStop = viewModel::stopAgent,
+                            onOpenProjectPicker = viewModel::openProjectPicker
+                        )
                     }
                     HorizontalDivider(Modifier.width(1.dp))
                     Row(Modifier.weight(0.42f)) {
@@ -161,7 +181,10 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
             } else {
                 Row(Modifier.fillMaxSize()) {
                     when (state.currentTab) {
-                        AppTab.CHAT -> ChatScreen(state = state, onSend = viewModel::sendMessage, onStop = viewModel::stopAgent)
+                        AppTab.CHAT -> ChatScreen(
+                            state = state, onSend = viewModel::sendMessage, onStop = viewModel::stopAgent,
+                            onOpenProjectPicker = viewModel::openProjectPicker
+                        )
                         AppTab.WORKSPACE -> WorkspaceScreen(
                             state = state,
                             onRefresh = viewModel::refreshWorkspace,
@@ -179,16 +202,29 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
                         )
                         AppTab.SETTINGS -> SettingsScreen(
                             settings = state.settings,
+                            activeProject = state.activeProject,
                             onSaveProvider = viewModel::saveProvider,
                             onSaveCapabilities = viewModel::saveCapabilities,
                             onSaveGeneration = viewModel::saveGenerationParams,
-                            onSwitchToSandbox = viewModel::switchToSandbox,
-                            onAttachFolder = viewModel::attachRealFolder,
+                            onOpenProjectPicker = viewModel::openProjectPicker,
                             onSetThemeMode = viewModel::setThemeMode
                         )
                     }
                 }
             }
         }
+    }
+
+    if (state.showProjectPicker) {
+        ProjectPickerSheet(
+            projects = state.projects,
+            activeProjectId = state.activeProject?.id,
+            onSelect = { project -> viewModel.selectProject(project) },
+            onCreateSandbox = viewModel::createSandboxProject,
+            onAttachFolder = { folderPicker.launch(null) },
+            onRename = viewModel::renameProject,
+            onDelete = viewModel::deleteProject,
+            onDismiss = viewModel::dismissProjectPicker
+        )
     }
 }
