@@ -474,16 +474,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             part.id?.let { holder.id = it }
                             part.function?.name?.let { holder.name = it }
                             part.function?.arguments?.let { holder.arguments.append(it) }
-                            val path = extractField(holder.arguments.toString(), "path")
-                                ?: extractField(holder.arguments.toString(), "archiveName")
-                            val chip = ToolChip(holder.name, path, ToolStatus.RUNNING)
+                        }
+                        if (!delta.toolCalls.isNullOrEmpty()) {
+                            // Rebuilt from `calls` (keyed by the stream's own index) every time,
+                            // rather than searched-and-replaced by toolName — a call's name can
+                            // legitimately arrive blank in its first chunk and fill in a moment
+                            // later, and matching by name meant that blank-named chip became a
+                            // permanently-"running" orphan the instant the real name showed up,
+                            // which is exactly the frozen second chip in the bug report.
                             updateMessage(assistant.id) { msg ->
-                                val chips = msg.toolChips.toMutableList()
-                                val idx = chips.indexOfFirst { it.toolName == holder.name && it.status == ToolStatus.RUNNING }
-                                if (idx >= 0) chips[idx] = chip else chips.add(chip)
-                                msg.copy(toolChips = chips)
+                                val liveChips = calls.entries.sortedBy { it.key }.map { (_, c) ->
+                                    val path = extractField(c.arguments.toString(), "path")
+                                        ?: extractField(c.arguments.toString(), "archiveName")
+                                    ToolChip(c.name.ifBlank { "unknown_tool" }, path, ToolStatus.RUNNING)
+                                }
+                                msg.copy(toolChips = liveChips)
                             }
-                            _state.update { it.copy(statusLabel = "Running ${holder.name}…") }
+                            _state.update { it.copy(statusLabel = "Running…") }
                         }
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -501,8 +508,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     break
                 }
 
-                val toolCalls = calls.values.mapNotNull { c ->
-                    if (c.name.isNotBlank() && c.id.isNotBlank()) ToolCall(c.id, "function", FunctionCall(c.name, c.arguments.toString())) else null
+                // A blank id or name here means the provider's streaming tool-call chunks were
+                // malformed (a real quirk with some non-OpenAI-compatible endpoints) — NOT that
+                // no tool call happened. Silently dropping it made the loop think "no tools were
+                // called" and quietly end the turn, which is exactly the "why does it stop"
+                // symptom: frozen chips, no error text, no continuation. Falling back to a
+                // synthetic id/name instead keeps the call in the loop so it either succeeds or
+                // comes back as a clear "unsupported tool" error the model can see and retry from.
+                val toolCalls = calls.entries.mapIndexed { position, (index, c) ->
+                    val id = c.id.ifBlank { "call_${index}_$position" }
+                    val name = c.name.ifBlank { "unknown_tool" }
+                    ToolCall(id, "function", FunctionCall(name, c.arguments.toString()))
                 }
 
                 apiMessages.add(ChatMessage(role = "assistant", content = text.toString().ifBlank { null }, toolCalls = toolCalls.ifEmpty { null }))
