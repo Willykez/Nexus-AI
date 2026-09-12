@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -35,19 +36,20 @@ import androidx.compose.ui.unit.dp
  * tightened up: the provider/project badge lives inline instead of needing a tap to reveal, the
  * send button swaps to a stop button while the agent is running instead of just disabling, and
  * the outer card itself scrolls internally past ~6 lines so a huge paste can never push the send
- * button off-screen.
+ * button off-screen. Takes a TextFieldValue (not a plain String) so the caller can track cursor
+ * position for @ mention detection.
  */
 @Composable
 fun ChatInputBar(
-    text: String,
-    onTextChange: (String) -> Unit,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     isRunning: Boolean,
     providerBadge: @Composable () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val canSend = !isRunning && text.isNotBlank()
+    val canSend = !isRunning && value.text.isNotBlank()
 
     Surface(
         color = MaterialTheme.colorScheme.background,
@@ -63,11 +65,11 @@ fun ChatInputBar(
             ) {
                 Column(Modifier.padding(4.dp)) {
                     OutlinedTextField(
-                        value = text,
-                        onValueChange = onTextChange,
+                        value = value,
+                        onValueChange = onValueChange,
                         placeholder = {
                             Text(
-                                "Ask for anything — build, fix, rename, explain…",
+                                "Ask for anything, or type @ to reference a file…",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )

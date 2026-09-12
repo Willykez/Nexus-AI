@@ -16,6 +16,8 @@ import com.nexusforge.app.data.FunctionCall
 import com.nexusforge.app.data.Project
 import com.nexusforge.app.data.ProjectSource
 import com.nexusforge.app.data.ProjectStore
+import com.nexusforge.app.data.ProviderProfile
+import com.nexusforge.app.data.ProviderProfileStore
 import com.nexusforge.app.data.SettingsStore
 import com.nexusforge.app.data.ThemeMode
 import com.nexusforge.app.data.ToolCall
@@ -59,6 +61,13 @@ data class AppUiState(
     val projects: List<Project> = emptyList(),
     val showProjectPicker: Boolean = false,
 
+    // provider profiles — see "Additional fix" thread: fully-saved credentials, switch by name
+    val activeProviderProfile: ProviderProfile? = null,
+    val providerProfiles: List<ProviderProfile> = emptyList(),
+    val showProviderPicker: Boolean = false,
+    val providerFormEditing: ProviderProfile? = null,
+    val showProviderForm: Boolean = false,
+
     // chat
     val sessionId: String = UUID.randomUUID().toString(),
     val messages: List<UiChatMessage> = emptyList(),
@@ -68,14 +77,17 @@ data class AppUiState(
 
     // workspace
     val fileTree: FileNode = FileNode("", "project", true, 0),
+    val projectFilePaths: List<String> = emptyList(), // flattened, for @ mentions
     val highlightedPath: String? = null,
     val selectedFile: String? = null,
     val selectedFileContent: String = "",
     val workspaceStats: WorkspaceStats? = null,
     val lastExportedZip: String? = null,
+    val showFileTreeSheet: Boolean = false,
 
     // history
     val sessionSummaries: List<ChatSessionSummary> = emptyList(),
+    val showHistorySidebar: Boolean = false,
 
     // organizer
     val organizerLog: List<LogLine> = emptyList(),
@@ -87,11 +99,18 @@ data class AppUiState(
 
 enum class OrganizerPhase { IDLE, THINKING, WRITING, DONE, FAILED }
 
+private fun flattenFiles(node: FileNode, acc: MutableList<String> = mutableListOf()): List<String> {
+    if (!node.isDirectory && node.path.isNotBlank()) acc.add(node.path)
+    node.children.forEach { flattenFiles(it, acc) }
+    return acc
+}
+
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val settingsStore = SettingsStore(application)
     private val historyStore = ChatHistoryStore(application)
     private val projectStore = ProjectStore(application)
+    private val providerProfileStore = ProviderProfileStore(application)
     private val lenientJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
     private val _state = MutableStateFlow(AppUiState())
@@ -111,6 +130,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch { initializeActiveProject() }
+        viewModelScope.launch { initializeActiveProvider() }
         refreshSessions()
     }
 
@@ -128,6 +148,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         selectProject(target, persist = false)
     }
 
+    private suspend fun initializeActiveProvider() {
+        val profiles = providerProfileStore.list()
+        _state.update { it.copy(providerProfiles = profiles) }
+        if (profiles.isEmpty()) return // no default auto-created — nothing to guess a key for
+        val lastId = _state.value.settings?.lastActiveProviderProfileId
+        val target = profiles.find { it.id == lastId } ?: profiles.first()
+        _state.update { it.copy(activeProviderProfile = target) }
+    }
+
     private fun engineFor(source: ProjectSource): WorkspaceEngine = when (source) {
         is ProjectSource.Sandbox -> SandboxWorkspaceEngine(getApplication(), source.projectId)
         is ProjectSource.AttachedFolder -> RealFolderWorkspaceEngine(getApplication(), Uri.parse(source.treeUri), source.displayName)
@@ -136,6 +165,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ---------- Navigation ----------
 
     fun selectTab(tab: AppTab) = _state.update { it.copy(currentTab = tab) }
+
+    fun openHistorySidebar() = _state.update { it.copy(showHistorySidebar = true) }
+    fun dismissHistorySidebar() = _state.update { it.copy(showHistorySidebar = false) }
+
+    fun openFileTreeSheet() = _state.update { it.copy(showFileTreeSheet = true) }
+    fun dismissFileTreeSheet() = _state.update { it.copy(showFileTreeSheet = false) }
 
     // ---------- Projects ----------
 
@@ -209,7 +244,83 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ---------- Provider profiles ----------
+
+    fun openProviderPicker() {
+        viewModelScope.launch { _state.update { it.copy(providerProfiles = providerProfileStore.list(), showProviderPicker = true) } }
+    }
+
+    fun dismissProviderPicker() = _state.update { it.copy(showProviderPicker = false) }
+
+    fun selectProviderProfile(profile: ProviderProfile) {
+        _state.update { it.copy(activeProviderProfile = profile, showProviderPicker = false) }
+        viewModelScope.launch {
+            settingsStore.saveLastActiveProviderProfile(profile.id)
+            providerProfileStore.touch(profile.id)
+            _state.update { it.copy(providerProfiles = providerProfileStore.list()) }
+        }
+    }
+
+    fun requestAddProvider() = _state.update { it.copy(providerFormEditing = null, showProviderForm = true, showProviderPicker = false) }
+    fun requestEditProvider(profile: ProviderProfile) = _state.update { it.copy(providerFormEditing = profile, showProviderForm = true, showProviderPicker = false) }
+    fun dismissProviderForm() = _state.update { it.copy(showProviderForm = false) }
+
+    fun saveProviderProfile(name: String, baseUrl: String, apiKey: String, model: String) {
+        if (baseUrl.isBlank() || model.isBlank()) {
+            viewModelScope.launch { _snackbar.emit("Base URL and model are required") }
+            return
+        }
+        val editing = _state.value.providerFormEditing
+        viewModelScope.launch {
+            if (editing != null) {
+                providerProfileStore.update(editing.id, name, baseUrl, apiKey, model)
+            } else {
+                val created = providerProfileStore.create(name, baseUrl, apiKey, model)
+                selectProviderProfile(created)
+            }
+            val profiles = providerProfileStore.list()
+            _state.update {
+                it.copy(
+                    providerProfiles = profiles, showProviderForm = false,
+                    activeProviderProfile = if (editing != null && it.activeProviderProfile?.id == editing.id)
+                        profiles.find { p -> p.id == editing.id } else it.activeProviderProfile
+                )
+            }
+            _snackbar.emit(if (editing != null) "Provider updated" else "Provider saved and activated")
+        }
+    }
+
+    fun deleteProviderProfile(profile: ProviderProfile) {
+        viewModelScope.launch {
+            providerProfileStore.delete(profile.id)
+            val profiles = providerProfileStore.list()
+            _state.update {
+                it.copy(
+                    providerProfiles = profiles,
+                    activeProviderProfile = if (it.activeProviderProfile?.id == profile.id) profiles.firstOrNull() else it.activeProviderProfile
+                )
+            }
+            _snackbar.emit("Deleted \"${profile.name}\"")
+        }
+    }
+
     // ---------- Chat ----------
+
+    /** Reads any @path mentions that match a real project file and folds their content into the
+     *  outgoing prompt, so the model genuinely has the file rather than just seeing its name. */
+    private suspend fun expandMentions(rawText: String, engine: WorkspaceEngine): String {
+        val knownPaths = _state.value.projectFilePaths.toSet()
+        if (knownPaths.isEmpty()) return rawText
+        val mentioned = Regex("@([\\w\\-./]+)").findAll(rawText).map { it.groupValues[1] }.distinct()
+            .filter { it in knownPaths }.toList()
+        if (mentioned.isEmpty()) return rawText
+        val attached = StringBuilder()
+        for (path in mentioned) {
+            val content = runCatching { engine.readFile(path) }.getOrNull() ?: continue
+            attached.append("\n\n[Attached: $path]\n```\n$content\n```")
+        }
+        return if (attached.isEmpty()) rawText else rawText + attached
+    }
 
     fun sendMessage(rawText: String) {
         val prompt = rawText.trim()
@@ -221,17 +332,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             openProjectPicker()
             return
         }
-
-        if (apiMessages.isEmpty()) {
-            val settings = _state.value.settings
-            apiMessages.add(ChatMessage(role = "system", content = ToolRegistry.systemPrompt(
-                settings?.capabilities ?: CapabilityFlags(), project.source
-            )))
+        val providerProfile = _state.value.activeProviderProfile
+        if (providerProfile == null) {
+            viewModelScope.launch { _snackbar.emit("Add or pick a provider first.") }
+            openProviderPicker()
+            return
         }
-        apiMessages.add(ChatMessage(role = "user", content = prompt))
+
         _state.update { it.copy(messages = it.messages + UiChatMessage(role = "user", text = prompt), error = null) }
 
-        agentJob = viewModelScope.launch { runAgentLoop(engine) }
+        agentJob = viewModelScope.launch {
+            val expandedPrompt = expandMentions(prompt, engine)
+            if (apiMessages.isEmpty()) {
+                val settings = _state.value.settings
+                apiMessages.add(ChatMessage(role = "system", content = ToolRegistry.systemPrompt(
+                    settings?.capabilities ?: CapabilityFlags(), project.source
+                )))
+            }
+            apiMessages.add(ChatMessage(role = "user", content = expandedPrompt))
+            runAgentLoop(engine, providerProfile)
+        }
     }
 
     fun stopAgent() {
@@ -268,7 +388,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _snackbar.emit("This conversation's original project is gone — staying on the current one.")
             }
             _state.update {
-                it.copy(sessionId = session.id, messages = restored, currentTab = AppTab.CHAT)
+                it.copy(sessionId = session.id, messages = restored, currentTab = AppTab.CHAT, showHistorySidebar = false)
             }
         }
     }
@@ -291,14 +411,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val current = _state.value
         val firstUser = current.messages.firstOrNull { it.role == "user" }?.text
         if (firstUser == null) return // nothing to save
-        val settings = current.settings
+        val providerProfile = current.activeProviderProfile
         val project = current.activeProject
         viewModelScope.launch {
             historyStore.saveSession(
                 ChatSession(
                     id = current.sessionId,
                     title = ChatHistoryStore.titleFrom(firstUser),
-                    providerLabel = settings?.let { SettingsStore.providerLabel(it.provider.baseUrl) } ?: "—",
+                    providerLabel = providerProfile?.name ?: "—",
                     projectLabel = project?.name ?: "Unknown project",
                     projectId = project?.id,
                     createdAt = System.currentTimeMillis(),
@@ -316,9 +436,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun runAgentLoop(engine: WorkspaceEngine) {
+    private suspend fun runAgentLoop(engine: WorkspaceEngine, providerProfile: ProviderProfile) {
         val settings = _state.value.settings ?: return
-        val client = AiClient(settings.provider)
+        val client = AiClient(providerProfile.toConfig())
         _state.update { it.copy(isAgentRunning = true, statusLabel = "Thinking…") }
 
         try {
@@ -333,7 +453,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 var streamError: String? = null
 
                 val request = ChatRequest(
-                    model = settings.provider.model,
+                    model = providerProfile.model,
                     messages = apiMessages.toList(),
                     tools = ToolRegistry.activeTools(settings.capabilities),
                     stream = true,
@@ -474,7 +594,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val tree = runCatching { engine.fileTree() }.getOrNull()
             val stats = runCatching { engine.stats() }.getOrNull()
-            if (tree != null) _state.update { it.copy(fileTree = tree, workspaceStats = stats) }
+            if (tree != null) _state.update { it.copy(fileTree = tree, workspaceStats = stats, projectFilePaths = flattenFiles(tree)) }
         }
     }
 
@@ -521,11 +641,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** For the file-tree bottom sheet's inline expand-to-view — reads without leaving the sheet. */
+    suspend fun readFileContent(path: String): String {
+        val engine = workspaceEngine ?: return "No project selected."
+        return runCatching { engine.readFile(path) }.getOrElse { "Error reading file: ${it.message}" }
+    }
+
     // ---------- Organizer (paste-a-whole-project mode) ----------
 
     fun organizeDump(rawDump: String) {
-        val settings = _state.value.settings ?: return
+        val providerProfile = _state.value.activeProviderProfile
         val engine = workspaceEngine ?: return
+        if (providerProfile == null) {
+            viewModelScope.launch { _snackbar.emit("Add or pick a provider first.") }
+            openProviderPicker()
+            return
+        }
         if (rawDump.isBlank() || _state.value.organizerRunning) return
         _state.update {
             it.copy(
@@ -534,7 +665,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         viewModelScope.launch {
-            ProjectDumpEngine(settings.provider).organize(rawDump, engine).collect { progress ->
+            ProjectDumpEngine(providerProfile.toConfig()).organize(rawDump, engine).collect { progress ->
                 when (progress) {
                     is ProjectDumpEngine.Progress.Thinking ->
                         _state.update { it.copy(organizerThinkingChars = progress.charsReceived) }
@@ -572,17 +703,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ---------- Settings ----------
-
-    fun saveProvider(baseUrl: String, apiKey: String, model: String) {
-        if (baseUrl.isBlank() || model.isBlank()) {
-            viewModelScope.launch { _snackbar.emit("Base URL and model are required") }
-            return
-        }
-        viewModelScope.launch {
-            settingsStore.saveProvider(baseUrl, apiKey, model)
-            _snackbar.emit("Provider saved and activated")
-        }
-    }
 
     fun saveCapabilities(fileReadWrite: Boolean, zip: Boolean) {
         viewModelScope.launch { settingsStore.saveCapabilities(fileReadWrite, zip) }

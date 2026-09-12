@@ -1,60 +1,47 @@
 package com.nexusforge.app.data
 
 import android.content.Context
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import android.util.Base64
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import java.security.KeyStore
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 private val Context.settingsDataStore by preferencesDataStore(name = "nexus_forge_settings")
 
 data class AppSettings(
-    val provider: ProviderConfig,
     val capabilities: CapabilityFlags,
     val temperature: Float,
     val maxOutputTokens: Int,
     val themeMode: ThemeMode,
     /** Which Project (see ProjectStore) to reopen on cold start — not a workspace itself. */
-    val lastActiveProjectId: String?
+    val lastActiveProjectId: String?,
+    /** Which saved ProviderProfile to reopen on cold start. */
+    val lastActiveProviderProfileId: String?
 )
 
 /**
- * Single source of truth for everything that survives app restart except chat sessions
- * (ChatHistoryStore) and projects/workspaces themselves (ProjectStore). The API key is
- * Keystore-encrypted at rest; re-saving other fields with a blank key field keeps the
- * previously saved key rather than wiping it.
+ * Global, provider-independent settings that survive app restart — everything else (chat
+ * sessions, projects/workspaces, and now provider credentials) lives in its own dedicated store:
+ * ChatHistoryStore, ProjectStore, ProviderProfileStore respectively. Keeping credentials out of
+ * here is deliberate — a single global "the" API key was the whole problem when someone has
+ * several keys for the same provider.
  */
 class SettingsStore(private val context: Context) {
 
     private object Keys {
-        val baseUrl = stringPreferencesKey("base_url")
-        val encryptedApiKey = stringPreferencesKey("encrypted_api_key")
-        val model = stringPreferencesKey("model")
         val filesEnabled = booleanPreferencesKey("files_enabled")
         val zipEnabled = booleanPreferencesKey("zip_enabled")
         val temperature = stringPreferencesKey("temperature")
         val maxTokens = stringPreferencesKey("max_tokens")
         val themeMode = stringPreferencesKey("theme_mode") // "system" | "light" | "dark"
         val lastActiveProjectId = stringPreferencesKey("last_active_project_id")
+        val lastActiveProviderProfileId = stringPreferencesKey("last_active_provider_profile_id")
     }
 
     val settingsFlow: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
         AppSettings(
-            provider = ProviderConfig(
-                baseUrl = prefs[Keys.baseUrl] ?: "https://api.openai.com/v1",
-                apiKey = decrypt(prefs[Keys.encryptedApiKey].orEmpty()),
-                model = prefs[Keys.model] ?: "gpt-4o-mini"
-            ),
             capabilities = CapabilityFlags(
                 fileReadWriteEnabled = prefs[Keys.filesEnabled] ?: true,
                 zipEnabled = prefs[Keys.zipEnabled] ?: true
@@ -66,7 +53,8 @@ class SettingsStore(private val context: Context) {
                 "dark" -> ThemeMode.DARK
                 else -> ThemeMode.SYSTEM
             },
-            lastActiveProjectId = prefs[Keys.lastActiveProjectId]
+            lastActiveProjectId = prefs[Keys.lastActiveProjectId],
+            lastActiveProviderProfileId = prefs[Keys.lastActiveProviderProfileId]
         )
     }
 
@@ -77,14 +65,6 @@ class SettingsStore(private val context: Context) {
                 ThemeMode.DARK -> "dark"
                 ThemeMode.SYSTEM -> "system"
             }
-        }
-    }
-
-    suspend fun saveProvider(baseUrl: String, apiKey: String, model: String) {
-        context.settingsDataStore.edit { prefs ->
-            prefs[Keys.baseUrl] = baseUrl.trim().trimEnd('/')
-            if (apiKey.isNotBlank()) prefs[Keys.encryptedApiKey] = encrypt(apiKey.trim())
-            prefs[Keys.model] = model.trim()
         }
     }
 
@@ -106,43 +86,12 @@ class SettingsStore(private val context: Context) {
         context.settingsDataStore.edit { prefs -> prefs[Keys.lastActiveProjectId] = id }
     }
 
-    // ---------- Keystore AES/GCM encryption for the API key ----------
-
-    private fun getOrCreateKey(): SecretKey {
-        val alias = "nexus_forge_api_key"
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(alias, null) as? SecretKey)?.let { return it }
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        generator.init(
-            KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .build()
-        )
-        return generator.generateKey()
-    }
-
-    private fun encrypt(value: String): String {
-        if (value.isEmpty()) return ""
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
-        val packed = cipher.iv + cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-        return Base64.encodeToString(packed, Base64.NO_WRAP)
-    }
-
-    private fun decrypt(encoded: String): String {
-        if (encoded.isEmpty()) return ""
-        return try {
-            val packed = Base64.decode(encoded, Base64.NO_WRAP)
-            require(packed.size > 12)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, packed.copyOfRange(0, 12)))
-            String(cipher.doFinal(packed.copyOfRange(12, packed.size)), Charsets.UTF_8)
-        } catch (_: Exception) { "" }
+    suspend fun saveLastActiveProviderProfile(id: String) {
+        context.settingsDataStore.edit { prefs -> prefs[Keys.lastActiveProviderProfileId] = id }
     }
 
     companion object {
-        /** Presets shown as tappable chips in Settings — a shortcut, never a requirement. */
+        /** Presets shown as tappable chips when adding a provider — a shortcut, never a requirement. */
         val PRESETS = listOf(
             Triple("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
             Triple("Gemini (OpenAI shim)", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-1.5-flash"),

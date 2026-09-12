@@ -26,6 +26,22 @@ Jetpack Compose Android app. "Nexus Forge" is a placeholder name — rename the
   a paste-from-clipboard shortcut, a character counter, per-file status rows, and a success
   banner with a one-tap jump to the Workspace tab.
 
+- **Saved provider profiles, not one global key** (`data/ProviderProfile.kt`, `data/ProviderProfileStore.kt`):
+  add as many provider credentials as you need — three different Gemini keys, OpenAI, a local
+  Ollama — each fully saved (Keystore-encrypted) and switchable by name from a tappable chip in
+  the chat input or from Settings. No more re-pasting a key you forgot you had.
+- **@ mentions for project files** (`ui/components/MentionPopup.kt`): typing `@` in the chat
+  input opens a live-filtered list of every file in the active project; picking one inserts the
+  path as a token, and when the message sends, that file's real content is folded into the
+  prompt (`AppViewModel.expandMentions`) — the model genuinely has the file, not just its name.
+- **A history sidebar** (`ui/components/HistorySidebar.kt`), modeled on the Aurora reference's
+  left panel: new-chat action, live search, and the conversation list, opened via the hamburger
+  icon or a swipe from the left edge.
+- **A file-tree bottom sheet** (`ui/components/FileTreeBottomSheet.kt`) as an alternative to the
+  full Workspace screen: reachable from a button in the chat input, it floats over Chat or
+  Organizer, and tapping a file expands its content inline (tap again to collapse) instead of
+  navigating away.
+
 ## What got unified
 
 - **Per-conversation projects, not one shared global workspace** (`data/ProjectStore.kt`,

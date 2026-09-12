@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Edit
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,12 +45,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nexusforge.app.data.ProjectSource
 import com.nexusforge.app.data.SettingsStore
 import com.nexusforge.app.ui.components.ChatBubble
 import com.nexusforge.app.ui.components.ChatInputBar
+import com.nexusforge.app.ui.components.MentionPopup
 import com.nexusforge.app.ui.components.ProviderBadge
 import com.nexusforge.app.viewmodel.AppUiState
 import kotlinx.coroutines.launch
@@ -71,14 +76,31 @@ private val QUICK_CHIPS = listOf(
     QuickChip("⑂ Explain", "Explain how this works, step by step: ")
 )
 
+/** Where an active "@" mention starts and what's been typed after it, or null if none is active. */
+private data class MentionState(val atIndex: Int, val query: String)
+
+private fun findActiveMention(value: TextFieldValue): MentionState? {
+    val cursor = value.selection.end
+    if (cursor <= 0) return null
+    val upto = value.text.substring(0, cursor)
+    val at = upto.lastIndexOf('@')
+    if (at < 0) return null
+    if (at > 0 && !upto[at - 1].isWhitespace()) return null
+    val query = upto.substring(at + 1)
+    if (query.contains(' ') || query.contains('\n')) return null
+    return MentionState(at, query)
+}
+
 @Composable
 fun ChatScreen(
     state: AppUiState,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
-    onOpenProjectPicker: () -> Unit
+    onOpenProjectPicker: () -> Unit,
+    onOpenProviderPicker: () -> Unit,
+    onOpenFileTree: () -> Unit
 ) {
-    var draft by remember { mutableStateOf("") }
+    var draft by remember { mutableStateOf(TextFieldValue("")) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -88,9 +110,22 @@ fun ChatScreen(
         }
     }
 
+    val mention = remember(draft.text, draft.selection) { findActiveMention(draft) }
+    val mentionResults = remember(mention, state.projectFilePaths) {
+        if (mention == null) emptyList()
+        else state.projectFilePaths.filter { it.contains(mention.query, ignoreCase = true) }.take(8)
+    }
+
+    fun pickMention(path: String) {
+        val m = mention ?: return
+        val newText = draft.text.substring(0, m.atIndex) + "@" + path + " " + draft.text.substring(draft.selection.end)
+        val newCursor = m.atIndex + path.length + 2
+        draft = TextFieldValue(newText, TextRange(newCursor))
+    }
+
     Column(Modifier.fillMaxSize()) {
         if (state.messages.isEmpty()) {
-            EmptyChatHint(modifier = Modifier.weight(1f), onSuggestionSelected = { draft = it })
+            EmptyChatHint(modifier = Modifier.weight(1f), onSuggestionSelected = { draft = TextFieldValue(it, TextRange(it.length)) })
         } else {
             LazyColumn(
                 state = listState,
@@ -117,28 +152,35 @@ fun ChatScreen(
             }
         }
 
-        val settings = state.settings
-        val providerLabel = settings?.let { SettingsStore.providerLabel(it.provider.baseUrl) } ?: "—"
-        val isReady = settings != null && (settings.provider.apiKey.isNotBlank() || SettingsStore.isKeylessLocal(settings.provider.baseUrl))
+        val profile = state.activeProviderProfile
+        val providerLabel = profile?.let { SettingsStore.providerLabel(it.baseUrl) } ?: "No provider"
+        val isReady = profile != null && (profile.apiKey.isNotBlank() || SettingsStore.isKeylessLocal(profile.baseUrl))
 
-        if (state.messages.isEmpty() && !state.isAgentRunning) {
-            QuickChipsRow(onPick = { draft = it })
+        if (mention != null) {
+            MentionPopup(query = mention.query, results = mentionResults, onPick = ::pickMention)
+        } else if (state.messages.isEmpty() && !state.isAgentRunning) {
+            QuickChipsRow(onPick = { draft = TextFieldValue(it, TextRange(it.length)) })
         }
 
         ChatInputBar(
-            text = draft,
-            onTextChange = { draft = it },
-            onSend = { onSend(draft); draft = "" },
+            value = draft,
+            onValueChange = { draft = it },
+            onSend = { onSend(draft.text); draft = TextFieldValue("") },
             onStop = onStop,
             isRunning = state.isAgentRunning,
             providerBadge = {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ProviderBadge(providerLabel, settings?.provider?.model ?: "no model", isReady)
+                    Box(Modifier.clickable(onClick = onOpenProviderPicker)) {
+                        ProviderBadge(providerLabel, profile?.model ?: "add a provider", isReady)
+                    }
                     ProjectChip(
                         name = state.activeProject?.name ?: "Pick a project",
                         isAttached = state.activeProject?.source is ProjectSource.AttachedFolder,
                         onClick = onOpenProjectPicker
                     )
+                    IconButton(onClick = onOpenFileTree, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.AccountTree, contentDescription = "Project files", modifier = Modifier.size(18.dp))
+                    }
                 }
             }
         )
@@ -211,7 +253,7 @@ private fun EmptyChatHint(modifier: Modifier = Modifier, onSuggestionSelected: (
     ) {
         Text("Talk to your project", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Ask in plain language, or start from one of these.",
+            "Ask in plain language, type @ to reference a file, or start from one of these.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 6.dp, bottom = 20.dp)

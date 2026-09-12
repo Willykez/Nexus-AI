@@ -18,11 +18,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
@@ -34,6 +37,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -51,8 +55,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.documentfile.provider.DocumentFile
 import com.nexusforge.app.data.AppTab
+import com.nexusforge.app.data.SettingsStore
 import com.nexusforge.app.data.ThemeMode
+import com.nexusforge.app.ui.components.FileTreeBottomSheet
+import com.nexusforge.app.ui.components.HistorySidebarContent
 import com.nexusforge.app.ui.components.ProjectPickerSheet
+import com.nexusforge.app.ui.components.ProviderFormDialog
+import com.nexusforge.app.ui.components.ProviderPickerSheet
 import com.nexusforge.app.ui.screens.ChatScreen
 import com.nexusforge.app.ui.screens.HistoryScreen
 import com.nexusforge.app.ui.screens.OrganizerScreen
@@ -106,14 +115,26 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
     val isWide = LocalConfiguration.current.screenWidthDp >= WIDE_LAYOUT_BREAKPOINT_DP
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     LaunchedEffect(Unit) {
         viewModel.snackbar.collect { message -> if (message.isNotBlank()) snackbarHostState.showSnackbar(message) }
     }
 
-    // Back behavior: any non-Chat tab goes back to Chat first; Chat itself needs a second press
-    // within EXIT_CONFIRM_WINDOW_MS to actually exit, so a stray back tap never kills the app.
-    if (state.currentTab != AppTab.CHAT) {
+    // Keep the drawer and the ViewModel's notion of "sidebar open" in sync in both directions —
+    // a swipe-to-close or scrim tap changes drawerState directly without going through us.
+    LaunchedEffect(state.showHistorySidebar) {
+        if (state.showHistorySidebar) drawerState.open() else drawerState.close()
+    }
+    LaunchedEffect(drawerState.currentValue) {
+        if (drawerState.currentValue == DrawerValue.Closed && state.showHistorySidebar) viewModel.dismissHistorySidebar()
+    }
+
+    // Back priority, most-specific first: close the drawer, then leave a non-Chat tab, then
+    // require a confirming second press to actually exit from Chat.
+    if (drawerState.isOpen) {
+        BackHandler { scope.launch { drawerState.close() } }
+    } else if (state.currentTab != AppTab.CHAT) {
         BackHandler { viewModel.selectTab(AppTab.CHAT) }
     } else {
         var lastBackPressAt by remember { mutableLongStateOf(0L) }
@@ -144,112 +165,141 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
         AppTab.SETTINGS to Icons.Default.Settings
     )
 
-    Scaffold(
-        modifier = Modifier.imePadding(), // keeps the chat input bar (and now the message list) above the keyboard
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            // containerColor matches the screen background exactly (not the default tonal
-            // "surface" container M3 would otherwise use), so the status bar and the app content
-            // read as one continuous flat color instead of a visible seam.
-            TopAppBar(
-                title = { Text("Nexus Forge") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.background
-                ),
-                actions = {
-                    if (state.currentTab == AppTab.CHAT) {
-                        IconButton(onClick = { viewModel.newChat() }) {
-                            Icon(Icons.Default.Add, contentDescription = "New chat")
+    val activeProfile = state.activeProviderProfile
+    val providerStatusLabel = activeProfile?.let { "${it.name} · ${it.model}" } ?: "No provider configured"
+    val isProviderReady = activeProfile != null && (activeProfile.apiKey.isNotBlank() || SettingsStore.isKeylessLocal(activeProfile.baseUrl))
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            HistorySidebarContent(
+                sessions = state.sessionSummaries,
+                providerStatusLabel = providerStatusLabel,
+                isProviderReady = isProviderReady,
+                onNewChat = { viewModel.newChat(); viewModel.selectTab(AppTab.CHAT); scope.launch { drawerState.close() } },
+                onOpenSession = { id -> viewModel.loadSession(id); scope.launch { drawerState.close() } },
+                onDeleteSession = viewModel::deleteSession,
+                onOpenSettings = { viewModel.selectTab(AppTab.SETTINGS); scope.launch { drawerState.close() } }
+            )
+        }
+    ) {
+        Scaffold(
+            modifier = Modifier.imePadding(), // keeps the chat input bar (and message list) above the keyboard
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                TopAppBar(
+                    title = { Text("Nexus Forge") },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Chat history")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background
+                    ),
+                    actions = {
+                        if (state.currentTab == AppTab.CHAT) {
+                            IconButton(onClick = { viewModel.newChat() }) {
+                                Icon(Icons.Default.Add, contentDescription = "New chat")
+                            }
+                        }
+                    }
+                )
+            },
+            bottomBar = {
+                if (!isWide) {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
+                        tabs.forEach { (tab, icon) ->
+                            NavigationBarItem(
+                                selected = state.currentTab == tab,
+                                onClick = { viewModel.selectTab(tab) },
+                                icon = { Icon(icon, contentDescription = tab.label) },
+                                label = { Text(tab.label) }
+                            )
                         }
                     }
                 }
-            )
-        },
-        bottomBar = {
-            if (!isWide) {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
-                    tabs.forEach { (tab, icon) ->
-                        NavigationBarItem(
-                            selected = state.currentTab == tab,
-                            onClick = { viewModel.selectTab(tab) },
-                            icon = { Icon(icon, contentDescription = tab.label) },
-                            label = { Text(tab.label) }
-                        )
+            }
+        ) { padding ->
+            Row(Modifier.padding(padding).fillMaxSize()) {
+                if (isWide) {
+                    NavigationRail(containerColor = MaterialTheme.colorScheme.background) {
+                        tabs.forEach { (tab, icon) ->
+                            NavigationRailItem(
+                                selected = state.currentTab == tab,
+                                onClick = { viewModel.selectTab(tab) },
+                                icon = { Icon(icon, contentDescription = tab.label) },
+                                label = { Text(tab.label) }
+                            )
+                        }
                     }
                 }
-            }
-        }
-    ) { padding ->
-        Row(Modifier.padding(padding).fillMaxSize()) {
-            if (isWide) {
-                NavigationRail(containerColor = MaterialTheme.colorScheme.background) {
-                    tabs.forEach { (tab, icon) ->
-                        NavigationRailItem(
-                            selected = state.currentTab == tab,
-                            onClick = { viewModel.selectTab(tab) },
-                            icon = { Icon(icon, contentDescription = tab.label) },
-                            label = { Text(tab.label) }
-                        )
-                    }
-                }
-            }
 
-            if (isWide && state.currentTab == AppTab.CHAT) {
-                // Tablet: chat and the live file tree side by side, so writes are visible as they happen.
-                Row(Modifier.fillMaxSize()) {
-                    Row(Modifier.weight(0.58f)) {
-                        ChatScreen(
-                            state = state, onSend = viewModel::sendMessage, onStop = viewModel::stopAgent,
-                            onOpenProjectPicker = viewModel::openProjectPicker
-                        )
+                if (isWide && state.currentTab == AppTab.CHAT) {
+                    Row(Modifier.fillMaxSize()) {
+                        Row(Modifier.weight(0.58f)) {
+                            ChatScreen(
+                                state = state, onSend = viewModel::sendMessage, onStop = viewModel::stopAgent,
+                                onOpenProjectPicker = viewModel::openProjectPicker,
+                                onOpenProviderPicker = viewModel::openProviderPicker,
+                                onOpenFileTree = viewModel::openFileTreeSheet
+                            )
+                        }
+                        Row(Modifier.weight(0.42f)) {
+                            WorkspaceScreen(
+                                state = state,
+                                onRefresh = viewModel::refreshWorkspace,
+                                onOpenFile = viewModel::openFile,
+                                onClosePreview = viewModel::closeFilePreview,
+                                onRename = viewModel::renameFile,
+                                onDelete = viewModel::deleteFile,
+                                onZip = viewModel::zipWorkspace
+                            )
+                        }
                     }
-                    Row(Modifier.weight(0.42f)) {
-                        WorkspaceScreen(
-                            state = state,
-                            onRefresh = viewModel::refreshWorkspace,
-                            onOpenFile = viewModel::openFile,
-                            onClosePreview = viewModel::closeFilePreview,
-                            onRename = viewModel::renameFile,
-                            onDelete = viewModel::deleteFile,
-                            onZip = viewModel::zipWorkspace
-                        )
-                    }
-                }
-            } else {
-                Row(Modifier.fillMaxSize()) {
-                    when (state.currentTab) {
-                        AppTab.CHAT -> ChatScreen(
-                            state = state, onSend = viewModel::sendMessage, onStop = viewModel::stopAgent,
-                            onOpenProjectPicker = viewModel::openProjectPicker
-                        )
-                        AppTab.WORKSPACE -> WorkspaceScreen(
-                            state = state,
-                            onRefresh = viewModel::refreshWorkspace,
-                            onOpenFile = viewModel::openFile,
-                            onClosePreview = viewModel::closeFilePreview,
-                            onRename = viewModel::renameFile,
-                            onDelete = viewModel::deleteFile,
-                            onZip = viewModel::zipWorkspace
-                        )
-                        AppTab.ORGANIZER -> OrganizerScreen(
-                            log = state.organizerLog, phase = state.organizerPhase,
-                            thinkingChars = state.organizerThinkingChars, resultSummary = state.organizerResultSummary,
-                            isRunning = state.organizerRunning,
-                            onOrganize = viewModel::organizeDump, onViewWorkspace = { viewModel.selectTab(AppTab.WORKSPACE) }
-                        )
-                        AppTab.HISTORY -> HistoryScreen(
-                            sessions = state.sessionSummaries, onOpen = viewModel::loadSession, onDelete = viewModel::deleteSession
-                        )
-                        AppTab.SETTINGS -> SettingsScreen(
-                            settings = state.settings,
-                            activeProject = state.activeProject,
-                            onSaveProvider = viewModel::saveProvider,
-                            onSaveCapabilities = viewModel::saveCapabilities,
-                            onSaveGeneration = viewModel::saveGenerationParams,
-                            onOpenProjectPicker = viewModel::openProjectPicker,
-                            onSetThemeMode = viewModel::setThemeMode
-                        )
+                } else {
+                    Row(Modifier.fillMaxSize()) {
+                        when (state.currentTab) {
+                            AppTab.CHAT -> ChatScreen(
+                                state = state, onSend = viewModel::sendMessage, onStop = viewModel::stopAgent,
+                                onOpenProjectPicker = viewModel::openProjectPicker,
+                                onOpenProviderPicker = viewModel::openProviderPicker,
+                                onOpenFileTree = viewModel::openFileTreeSheet
+                            )
+                            AppTab.WORKSPACE -> WorkspaceScreen(
+                                state = state,
+                                onRefresh = viewModel::refreshWorkspace,
+                                onOpenFile = viewModel::openFile,
+                                onClosePreview = viewModel::closeFilePreview,
+                                onRename = viewModel::renameFile,
+                                onDelete = viewModel::deleteFile,
+                                onZip = viewModel::zipWorkspace
+                            )
+                            AppTab.ORGANIZER -> OrganizerScreen(
+                                log = state.organizerLog, phase = state.organizerPhase,
+                                thinkingChars = state.organizerThinkingChars, resultSummary = state.organizerResultSummary,
+                                isRunning = state.organizerRunning,
+                                onOrganize = viewModel::organizeDump, onViewWorkspace = { viewModel.selectTab(AppTab.WORKSPACE) }
+                            )
+                            AppTab.HISTORY -> HistoryScreen(
+                                sessions = state.sessionSummaries, onOpen = viewModel::loadSession, onDelete = viewModel::deleteSession
+                            )
+                            AppTab.SETTINGS -> SettingsScreen(
+                                settings = state.settings,
+                                activeProject = state.activeProject,
+                                providerProfiles = state.providerProfiles,
+                                activeProviderProfileId = state.activeProviderProfile?.id,
+                                onSaveCapabilities = viewModel::saveCapabilities,
+                                onSaveGeneration = viewModel::saveGenerationParams,
+                                onOpenProjectPicker = viewModel::openProjectPicker,
+                                onSetThemeMode = viewModel::setThemeMode,
+                                onSelectProvider = viewModel::selectProviderProfile,
+                                onAddProvider = viewModel::requestAddProvider,
+                                onEditProvider = viewModel::requestEditProvider,
+                                onDeleteProvider = viewModel::deleteProviderProfile
+                            )
+                        }
                     }
                 }
             }
@@ -266,6 +316,34 @@ private fun NexusForgeApp(viewModel: AppViewModel) {
             onRename = viewModel::renameProject,
             onDelete = viewModel::deleteProject,
             onDismiss = viewModel::dismissProjectPicker
+        )
+    }
+
+    if (state.showProviderPicker) {
+        ProviderPickerSheet(
+            profiles = state.providerProfiles,
+            activeProfileId = state.activeProviderProfile?.id,
+            onSelect = { profile -> viewModel.selectProviderProfile(profile) },
+            onAddRequested = viewModel::requestAddProvider,
+            onEditRequested = viewModel::requestEditProvider,
+            onDelete = viewModel::deleteProviderProfile,
+            onDismiss = viewModel::dismissProviderPicker
+        )
+    }
+
+    if (state.showProviderForm) {
+        ProviderFormDialog(
+            editing = state.providerFormEditing,
+            onDismiss = viewModel::dismissProviderForm,
+            onSave = { name, baseUrl, apiKey, model -> viewModel.saveProviderProfile(name, baseUrl, apiKey, model) }
+        )
+    }
+
+    if (state.showFileTreeSheet) {
+        FileTreeBottomSheet(
+            root = state.fileTree,
+            onReadFile = { path -> viewModel.readFileContent(path) },
+            onDismiss = viewModel::dismissFileTreeSheet
         )
     }
 }
