@@ -23,7 +23,10 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -36,11 +39,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -130,9 +133,20 @@ private fun renderInline(line: String, codeBackground: androidx.compose.ui.graph
 
 @Composable
 private fun CodeBlock(language: String?, code: String, live: Boolean = false) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1600); copied = false } }
+
+    // Persists per-block across recompositions via Compose's positional memory — streaming only
+    // ever appends to the last block or adds new ones after it, so earlier blocks' slots (and
+    // therefore their collapse state) stay stable. Forced expanded while live regardless of what
+    // this holds, so a block always shows its content while it's actively being written.
+    var manuallyExpanded by remember { mutableStateOf(true) }
+    val expanded = live || manuallyExpanded
+    val chevronRotation by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f, label = "chevron"
+    )
 
     // While still being written, cap the height and auto-scroll to the bottom — a live "tail -f"
     // view of the last few lines rather than an ever-growing wall of text scrolling the whole
@@ -150,7 +164,6 @@ private fun CodeBlock(language: String?, code: String, live: Boolean = false) {
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
     ) {
         Column {
-            // macOS-style traffic-light header, matching the reference design's code-block chrome.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -158,79 +171,114 @@ private fun CodeBlock(language: String?, code: String, live: Boolean = false) {
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TrafficDot(Color(0xFFFF5F57))
-                    TrafficDot(Color(0xFFFEBC2E))
-                    TrafficDot(Color(0xFF28C840))
-                }
                 if (live) {
+                    PulsingDot(MaterialTheme.colorScheme.primary)
+                    Text(
+                        "  Writing " + (language?.ifBlank { null } ?: "code") + "…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
                     Row(
                         Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        PulsingDot(MaterialTheme.colorScheme.primary)
+                        Icon(
+                            Icons.Default.Code, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp)
+                        )
                         Text(
-                            "  Writing " + (language?.ifBlank { null } ?: "code") + "…",
+                            (language?.ifBlank { null } ?: "text").replaceFirstChar { it.uppercase() },
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            letterSpacing = 0.5.sp
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = MonoFamily
                         )
                     }
-                } else {
-                    Text(
-                        text = (language?.ifBlank { null } ?: "code").uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        letterSpacing = 1.sp,
-                        modifier = Modifier.weight(1f),
-                        textAlign = TextAlign.Center
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        modifier = Modifier.clickable {
-                            clipboard.setText(AnnotatedString(code))
-                            copied = true
-                        }
-                    ) {
-                        Row(
-                            Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Icon(
-                                if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
-                                contentDescription = "Copy code",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                if (copied) "Copied" else "Copy",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    HeaderIconButton(Icons.Default.Download, "Save code") {
+                        val uri = saveSnippetForSharing(context, language, code)
+                        if (uri != null) {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "Save code"))
                         }
                     }
+                    HeaderIconButton(if (copied) Icons.Default.Check else Icons.Default.ContentCopy, "Copy code") {
+                        clipboard.setText(AnnotatedString(code))
+                        copied = true
+                    }
+                    HeaderIconButton(
+                        Icons.Default.KeyboardArrowDown, if (expanded) "Collapse" else "Expand",
+                        modifier = Modifier.rotate(chevronRotation)
+                    ) { manuallyExpanded = !manuallyExpanded }
                 }
             }
-            Box(
-                modifier = Modifier
-                    .let { if (live) it.heightIn(max = 130.dp) else it }
-                    .verticalScroll(if (live) scrollState else rememberScrollState())
-                    .horizontalScroll(rememberScrollState())
-                    .padding(14.dp)
-            ) {
-                Text(text = code, fontFamily = MonoFamily, style = MaterialTheme.typography.bodyMedium, lineHeight = 20.sp)
+            if (expanded) {
+                Box(
+                    modifier = Modifier
+                        .let { if (live) it.heightIn(max = 130.dp) else it }
+                        .verticalScroll(if (live) scrollState else rememberScrollState())
+                        .horizontalScroll(rememberScrollState())
+                        .padding(14.dp)
+                ) {
+                    Text(text = code, fontFamily = MonoFamily, style = MaterialTheme.typography.bodyMedium, lineHeight = 20.sp)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun TrafficDot(color: Color) {
-    Surface(color = color, shape = androidx.compose.foundation.shape.CircleShape, modifier = Modifier.size(9.dp)) {}
+private fun HeaderIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    androidx.compose.material3.IconButton(onClick = onClick, modifier = Modifier.size(28.dp)) {
+        Icon(icon, contentDescription = contentDescription, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier.size(16.dp))
+    }
+}
+
+/** Maps a fenced code block's language tag to a sane file extension for the saved snippet. */
+private fun extensionFor(language: String?): String = when (language?.lowercase()?.trim()) {
+    "kotlin", "kt" -> "kt"
+    "java" -> "java"
+    "python", "py" -> "py"
+    "javascript", "js" -> "js"
+    "typescript", "ts" -> "ts"
+    "tsx" -> "tsx"
+    "jsx" -> "jsx"
+    "html" -> "html"
+    "css" -> "css"
+    "json" -> "json"
+    "xml" -> "xml"
+    "bash", "sh", "shell" -> "sh"
+    "sql" -> "sql"
+    "yaml", "yml" -> "yaml"
+    "markdown", "md" -> "md"
+    "c" -> "c"
+    "cpp", "c++" -> "cpp"
+    "go" -> "go"
+    "rust", "rs" -> "rs"
+    "swift" -> "swift"
+    else -> "txt"
+}
+
+private fun saveSnippetForSharing(context: android.content.Context, language: String?, code: String): android.net.Uri? {
+    return try {
+        val dir = java.io.File(context.cacheDir, "snippets").apply { mkdirs() }
+        val file = java.io.File(dir, "snippet_${System.currentTimeMillis()}.${extensionFor(language)}")
+        file.writeText(code)
+        androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    } catch (_: Exception) {
+        null
+    }
 }
 
 @Composable

@@ -42,6 +42,14 @@ Jetpack Compose Android app. "Nexus Forge" is a placeholder name — rename the
   Organizer, and tapping a file expands its content inline (tap again to collapse) instead of
   navigating away.
 
+- **Code blocks that don't cut you off, and that you control** (`ui/markdown/Markdown.kt`):
+  the agent's step limit went from 8 to 25 — a real multi-file build easily needs more tool
+  calls than that, and 8 was cutting off legitimate work partway through. Each code block now
+  force-expands with a live "tail -f" view while it's actively being written, then offers a
+  real collapse/expand toggle plus a download action (shares the snippet as a real file with
+  the right extension for its language) once it's done — replacing the macOS traffic-light
+  header with a `<> language` style closer to what a polished reference implementation showed.
+
 ## What got unified
 
 - **Per-conversation projects, not one shared global workspace** (`data/ProjectStore.kt`,

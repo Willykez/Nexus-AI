@@ -49,7 +49,11 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-private const val MAX_AGENT_ROUNDS = 8
+// A real multi-file build can easily need more than a handful of tool calls (list, then write
+// each file, then maybe a zip) — 8 was cutting off legitimate work partway through and forcing
+// the user to say "continue". This is a safety ceiling against a genuinely stuck loop, not a
+// budget for normal work, so it can afford to be generous.
+private const val MAX_AGENT_ROUNDS = 25
 
 data class AppUiState(
     val settingsLoaded: Boolean = false,
@@ -471,8 +475,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         delta.toolCalls?.forEach { part ->
                             val holder = calls.getOrPut(part.index) { MutablePendingCall() }
-                            part.id?.let { holder.id = it }
-                            part.function?.name?.let { holder.name = it }
+                            // Guard against blank, not just null: OpenAI itself omits id/name
+                            // entirely on continuation chunks, but many self-hosted/custom
+                            // OpenAI-compatible servers (exactly what a "Custom" provider is)
+                            // send them as an EXPLICIT empty string instead of omitting the
+                            // field. A plain ?.let on that empty string would silently wipe out
+                            // an id/name we'd already correctly captured from the first chunk —
+                            // which is exactly what turned every single call into "unknown_tool"
+                            // here. Only ever accept a non-blank value.
+                            part.id?.takeIf { it.isNotBlank() }?.let { holder.id = it }
+                            part.function?.name?.takeIf { it.isNotBlank() }?.let { holder.name = it }
                             part.function?.arguments?.let { holder.arguments.append(it) }
                         }
                         if (!delta.toolCalls.isNullOrEmpty()) {
