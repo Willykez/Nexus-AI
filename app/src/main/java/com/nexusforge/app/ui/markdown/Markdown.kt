@@ -3,13 +3,14 @@ package com.nexusforge.app.ui.markdown
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.animation.AnimatedVisibility
+
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,23 +28,26 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -58,164 +62,160 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
 import com.nexusforge.app.ui.theme.MonoFamily
+
 import kotlinx.coroutines.delay
 
 /**
- * Nexus Forge Markdown renderer.
+ * Lightweight Markdown renderer for AI/chat responses.
  *
- * Supported Markdown:
- * - # / ## / ### / #### headings
- * - paragraphs
+ * Supported:
+ * - # through #### headings
  * - **bold**
  * - *italic*
- * - ***bold italic***
- * - `inline code`
  * - ~~strikethrough~~
- * - bullet lists
- * - numbered lists
- * - task lists
+ * - `inline code`
+ * - [links](url)
+ * - unordered lists
+ * - ordered lists
  * - blockquotes
- * - horizontal rules
- * - basic [links](url)
- * - fenced ``` code blocks
- * - streaming/incomplete code fences
+ * - fenced code blocks
+ * - streaming/incomplete code blocks
  *
- * Important layout rule:
- *
- * Every vertically scrollable code block has a finite maximum height.
- * This is required because MarkdownText is normally rendered inside
- * ChatScreen's LazyColumn.
+ * This is intentionally dependency-free so it works with the existing Compose setup.
  */
 
+/* -------------------------------------------------------------------------- */
+/* Markdown model                                                             */
+/* -------------------------------------------------------------------------- */
+
 private sealed class MdBlock {
+
+    data class Text(
+        val content: String
+    ) : MdBlock()
 
     data class Code(
         val language: String?,
         val code: String,
-        val isOpen: Boolean,
-        val id: Int
-    ) : MdBlock()
-
-    data class Text(
-        val content: String,
-        val id: Int
+        val isOpen: Boolean
     ) : MdBlock()
 }
 
 /* -------------------------------------------------------------------------- */
-/* Markdown parsing                                                           */
+/* Markdown patterns                                                          */
 /* -------------------------------------------------------------------------- */
 
-private val FENCE_LINE = Regex(
-    """^\s*(`{3,}|~{3,})\s*([^\s`]*)?.*$"""
+private val FENCE_LINE =
+    Regex("^\\s*`{3,}\\s*([^\\s`]*)\\s*$")
+
+private val HEADER_LINE =
+    Regex("^\\s*(#{1,6})\\s+(.+?)\\s*$")
+
+private val BULLET_LINE =
+    Regex("^\\s*[-*+]\\s+(.+)$")
+
+private val NUMBERED_LINE =
+    Regex("^\\s*(\\d+)[.)]\\s+(.+)$")
+
+private val QUOTE_LINE =
+    Regex("^\\s*>\\s?(.*)$")
+
+private val HORIZONTAL_RULE =
+    Regex("^\\s*([-*_])(?:\\s*\\1){2,}\\s*$")
+
+/*
+ * Inline Markdown parser.
+ *
+ * Order matters:
+ * 1. links
+ * 2. code
+ * 3. bold
+ * 4. strikethrough
+ * 5. italic
+ */
+private val INLINE_TOKEN = Regex(
+    """(\[[^\]]+]\([^)]+\))|(`+[^`]+`+)|(\*\*.+?\*\*)|(~~.+?~~)|(\*[^*\n]+\*)|(_[^_\n]+_)"""
 )
 
-private val HEADER_LINE = Regex(
-    """^\s*(#{1,6})\s+(.+?)\s*$"""
-)
+/* -------------------------------------------------------------------------- */
+/* Markdown block parser                                                      */
+/* -------------------------------------------------------------------------- */
 
-private val BULLET_LINE = Regex(
-    """^(\s*)(?:[*\-+]|\u2022)\s+(.*)$"""
-)
-
-private val NUMBERED_LINE = Regex(
-    """^(\s*)(\d+)[.)]\s+(.*)$"""
-)
-
-private val QUOTE_LINE = Regex(
-    """^\s*>\s?(.*)$"""
-)
-
-private val TASK_LINE = Regex(
-    """^(\s*)(?:[*\-+]|\u2022)\s+([ xX])]\s+(.*)$"""
-)
-
-private val HORIZONTAL_RULE = Regex(
-    """^\s*(?:\*{3,}|-{3,}|_{3,})\s*$"""
-)
-
+/**
+ * Converts the raw AI response into text/code blocks.
+ *
+ * Important streaming behavior:
+ * If an opening fence has arrived but the closing fence has not arrived yet,
+ * the remaining content becomes an open Code block instead of leaking the
+ * backticks into the normal text renderer.
+ */
 private fun splitMarkdownBlocks(raw: String): List<MdBlock> {
     if (raw.isEmpty()) return emptyList()
 
-    val normalized = raw
-        .replace("\r\n", "\n")
-        .replace('\r', '\n')
+    val lines = raw.replace("\r\n", "\n").replace('\r', '\n').split("\n")
 
-    val lines = normalized.split('\n')
     val blocks = mutableListOf<MdBlock>()
-
     val textBuffer = StringBuilder()
-    var blockId = 0
 
     fun flushText() {
         if (textBuffer.isNotEmpty()) {
-            val content = textBuffer.toString()
-                .trimEnd('\n')
-
-            if (content.isNotBlank()) {
-                blocks += MdBlock.Text(
-                    content = content,
-                    id = blockId++
-                )
-            }
-
+            blocks += MdBlock.Text(
+                content = textBuffer.toString().trimEnd('\n')
+            )
             textBuffer.clear()
         }
     }
 
-    var i = 0
+    var index = 0
 
-    while (i < lines.size) {
-        val line = lines[i]
-        val fenceMatch = FENCE_LINE.matchEntire(line)
+    while (index < lines.size) {
+        val fenceMatch = FENCE_LINE.matchEntire(lines[index])
 
         if (fenceMatch == null) {
-            textBuffer
-                .append(line)
-                .append('\n')
+            textBuffer.append(lines[index])
 
-            i++
+            if (index < lines.lastIndex) {
+                textBuffer.append('\n')
+            }
+
+            index++
             continue
         }
 
+        /* Opening fence */
         flushText()
 
-        val fence = fenceMatch.groupValues[1]
-        val language = fenceMatch.groupValues
-            .getOrNull(2)
+        val language = fenceMatch
+            .groupValues
+            .getOrNull(1)
             ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+            ?.ifBlank { null }
 
         val codeLines = mutableListOf<String>()
-        var j = i + 1
+
+        var cursor = index + 1
         var closed = false
 
-        while (j < lines.size) {
-            val closing = lines[j].trim()
-
-            val isClosingFence =
-                closing.startsWith(fence.first().toString().repeat(fence.length)) &&
-                    closing.all { it == fence.first() }
-
-            if (isClosingFence) {
+        while (cursor < lines.size) {
+            if (FENCE_LINE.matches(lines[cursor])) {
                 closed = true
                 break
             }
 
-            codeLines += lines[j]
-            j++
+            codeLines += lines[cursor]
+            cursor++
         }
 
         blocks += MdBlock.Code(
             language = language,
-            code = codeLines.joinToString("\n"),
-            isOpen = !closed,
-            id = blockId++
+            code = codeLines.joinToString("\n").trimEnd(),
+            isOpen = !closed
         )
 
-        i = if (closed) {
-            j + 1
+        index = if (closed) {
+            cursor + 1
         } else {
             lines.size
         }
@@ -227,145 +227,157 @@ private fun splitMarkdownBlocks(raw: String): List<MdBlock> {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Inline Markdown                                                            */
+/* Inline renderer                                                            */
 /* -------------------------------------------------------------------------- */
 
-private val INLINE_TOKEN = Regex(
-    """
-    (\*\*\*[^*\n]+?\*\*\*)|
-    (\*\*[^*\n]+?\*\*)|
-    (~~[^~\n]+?~~)|
-    (`[^`\n]+`)|
-    (\*[^*\n]+?\*)|
-    (_[^_\n]+?_)|
-    (\[[^]+][^)]+)
-    """.trimIndent()
-)
-
+/**
+ * Pure Kotlin Markdown inline renderer.
+ *
+ * This function deliberately does NOT call MaterialTheme, remember(), or any
+ * other @Composable API. That prevents the compiler errors that occurred in
+ * the previous Markdown.kt.
+ */
 private fun renderInline(
     line: String,
     codeBackground: Color
-): AnnotatedString = buildAnnotatedString {
+): AnnotatedString {
+    return buildAnnotatedString {
+        var cursor = 0
 
-    var cursor = 0
+        for (match in INLINE_TOKEN.findAll(line)) {
 
-    for (match in INLINE_TOKEN.findAll(line)) {
-
-        if (match.range.first > cursor) {
-            append(
-                line.substring(
-                    cursor,
-                    match.range.first
-                )
-            )
-        }
-
-        val token = match.value
-
-        when {
-
-            /* ***bold italic*** */
-            token.startsWith("***") && token.endsWith("***") -> {
-                withStyle(
-                    SpanStyle(
-                        fontWeight = FontWeight.Bold,
-                        fontStyle = FontStyle.Italic
-                    )
-                ) {
-                    append(
-                        token.removeSurrounding("***")
-                    )
-                }
+            if (match.range.first > cursor) {
+                append(line.substring(cursor, match.range.first))
             }
 
-            /* **bold** */
-            token.startsWith("**") && token.endsWith("**") -> {
-                withStyle(
-                    SpanStyle(
-                        fontWeight = FontWeight.Bold
-                    )
-                ) {
-                    append(
-                        token.removeSurrounding("**")
-                    )
+            val token = match.value
+
+            when {
+
+                /* [label](url) */
+                token.startsWith("[") -> {
+                    val closingBracket = token.indexOf("](")
+
+                    if (closingBracket > 0 && token.endsWith(")")) {
+                        val label = token.substring(1, closingBracket)
+                        val url = token.substring(
+                            closingBracket + 2,
+                            token.length - 1
+                        )
+
+                        withStyle(
+                            SpanStyle(
+                                color = codeBackground.copy(alpha = 0f)
+                            )
+                        ) {
+                            append(label)
+                        }
+
+                        /*
+                         * The URL is intentionally not displayed.
+                         *
+                         * We keep the visible Markdown clean without introducing
+                         * a clickable URL dependency. The text remains selectable.
+                         */
+                    } else {
+                        append(token)
+                    }
                 }
-            }
 
-            /* ~~strike~~ */
-            token.startsWith("~~") && token.endsWith("~~") -> {
-                withStyle(
-                    SpanStyle(
-                        textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
-                    )
-                ) {
-                    append(
-                        token.removeSurrounding("~~")
-                    )
-                }
-            }
+                /* `inline code` */
+                token.startsWith("`") -> {
+                    val content = token.trim('`')
 
-            /* `inline code` */
-            token.startsWith("`") && token.endsWith("`") -> {
-                withStyle(
-                    SpanStyle(
-                        fontFamily = MonoFamily,
-                        background = codeBackground
-                    )
-                ) {
-                    append(" ")
-                    append(
-                        token.removeSurrounding("`")
-                    )
-                    append(" ")
-                }
-            }
-
-            /* *italic* / _italic_ */
-            token.startsWith("*") ||
-                (token.startsWith("_") && token.endsWith("_")) -> {
-
-                val marker =
-                    if (token.startsWith("*")) "*" else "_"
-
-                withStyle(
-                    SpanStyle(
-                        fontStyle = FontStyle.Italic
-                    )
-                ) {
-                    append(
-                        token.removeSurrounding(marker)
-                    )
-                }
-            }
-
-            /* [text](url) */
-            token.startsWith("[") -> {
-                val linkMatch = Regex(
-                    """^\[([^\]]+)]\(([^)]+)\)$"""
-                ).find(token)
-
-                if (linkMatch != null) {
                     withStyle(
                         SpanStyle(
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Medium
+                            fontFamily = MonoFamily,
+                            background = codeBackground
                         )
                     ) {
-                        append(linkMatch.groupValues[1])
+                        append(" ")
+                        append(content)
+                        append(" ")
                     }
-                } else {
-                    append(token)
                 }
+
+                /* **bold** */
+                token.startsWith("**") &&
+                    token.endsWith("**") &&
+                    token.length >= 4 -> {
+
+                    withStyle(
+                        SpanStyle(
+                            fontWeight = FontWeight.Bold
+                        )
+                    ) {
+                        append(
+                            token.removePrefix("**")
+                                .removeSuffix("**")
+                        )
+                    }
+                }
+
+                /* ~~strike~~ */
+                token.startsWith("~~") &&
+                    token.endsWith("~~") &&
+                    token.length >= 4 -> {
+
+                    withStyle(
+                        SpanStyle(
+                            textDecoration =
+                                androidx.compose.ui.text.style.TextDecoration.LineThrough
+                        )
+                    ) {
+                        append(
+                            token.removePrefix("~~")
+                                .removeSuffix("~~")
+                        )
+                    }
+                }
+
+                /* *italic* */
+                token.startsWith("*") &&
+                    token.endsWith("*") &&
+                    token.length >= 3 -> {
+
+                    withStyle(
+                        SpanStyle(
+                            fontStyle = FontStyle.Italic
+                        )
+                    ) {
+                        append(
+                            token.removePrefix("*")
+                                .removeSuffix("*")
+                        )
+                    }
+                }
+
+                /* _italic_ */
+                token.startsWith("_") &&
+                    token.endsWith("_") &&
+                    token.length >= 3 -> {
+
+                    withStyle(
+                        SpanStyle(
+                            fontStyle = FontStyle.Italic
+                        )
+                    ) {
+                        append(
+                            token.removePrefix("_")
+                                .removeSuffix("_")
+                        )
+                    }
+                }
+
+                else -> append(token)
             }
 
-            else -> append(token)
+            cursor = match.range.last + 1
         }
 
-        cursor = match.range.last + 1
-    }
-
-    if (cursor < line.length) {
-        append(line.substring(cursor))
+        if (cursor < line.length) {
+            append(line.substring(cursor))
+        }
     }
 }
 
@@ -377,17 +389,20 @@ private fun renderInline(
 private fun CodeBlock(
     language: String?,
     code: String,
-    live: Boolean,
-    blockId: Int
+    live: Boolean
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
 
-    var copied by remember(blockId) {
-        mutableStateOf(false)
-    }
+    var copied by remember { mutableStateOf(false) }
 
-    var manuallyExpanded by remember(blockId) {
+    /*
+     * Default expanded.
+     *
+     * The user can collapse completed code blocks.
+     * Streaming blocks are always expanded.
+     */
+    var manuallyExpanded by remember {
         mutableStateOf(true)
     }
 
@@ -395,34 +410,38 @@ private fun CodeBlock(
 
     val chevronRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
-        label = "code-chevron"
+        animationSpec = tween(durationMillis = 180),
+        label = "code_chevron"
     )
 
     val verticalScrollState = rememberScrollState()
     val horizontalScrollState = rememberScrollState()
 
     /*
-     * CRITICAL FIX:
+     * CRITICAL CRASH FIX
      *
-     * The vertical scrolling container ALWAYS receives a finite maximum
-     * height. Previously heightIn(max = 130.dp) was only applied when
-     * live == true, while verticalScroll() remained active after the
-     * code block finished.
+     * A LazyColumn measures its children with an effectively unbounded
+     * vertical constraint.
      *
-     * That caused:
+     * Therefore:
      *
-     * LazyColumn
-     *   -> ChatBubble
-     *      -> Markdown
-     *         -> verticalScroll()
-     *            -> infinite max height
+     *     verticalScroll()
      *
-     * Compose rejects that measurement.
+     * MUST have a finite height above it.
+     *
+     * The previous implementation only used heightIn() while live.
+     * Completed blocks then became:
+     *
+     *     verticalScroll(...)
+     *
+     * inside LazyColumn with no finite height -> crash.
+     *
+     * We now ALWAYS provide a finite maximum height.
      */
-    val maxCodeHeight = if (live) {
+    val codeMaxHeight = if (live) {
         130.dp
     } else {
-        500.dp
+        320.dp
     }
 
     LaunchedEffect(copied) {
@@ -433,7 +452,7 @@ private fun CodeBlock(
     }
 
     /*
-     * During streaming, keep the code view at the newest content.
+     * Keep a streaming block following the newest content.
      */
     LaunchedEffect(code, live) {
         if (live) {
@@ -449,7 +468,7 @@ private fun CodeBlock(
         border = BorderStroke(
             1.dp,
             if (live) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
             } else {
                 MaterialTheme.colorScheme.outline
             }
@@ -461,7 +480,10 @@ private fun CodeBlock(
 
         Column {
 
-            /* Code header */
+            /* ------------------------------------------------------------------ */
+            /* Code header                                                        */
+            /* ------------------------------------------------------------------ */
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -482,11 +504,12 @@ private fun CodeBlock(
                     )
 
                     Text(
-                        text = "  Writing ${
-                            language
-                                ?.takeIf { it.isNotBlank() }
-                                ?: "code"
-                        }…",
+                        text =
+                            "  Writing " +
+                                (language
+                                    ?.ifBlank { null }
+                                    ?: "code") +
+                                "…",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         letterSpacing = 0.5.sp,
@@ -498,26 +521,26 @@ private fun CodeBlock(
                     Row(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement =
+                            Arrangement.spacedBy(6.dp)
                     ) {
 
                         Icon(
-                            Icons.Default.Code,
+                            imageVector = Icons.Default.Code,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint =
+                                MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
                             modifier = Modifier.size(15.dp)
                         )
 
                         Text(
-                            text = (
-                                language
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?: "text"
-                                ).replaceFirstChar {
-                                    it.uppercase()
-                                },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = displayLanguage(language),
+                            style =
+                                MaterialTheme.typography.labelSmall,
+                            color =
+                                MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
                             fontFamily = MonoFamily
                         )
                     }
@@ -533,20 +556,17 @@ private fun CodeBlock(
                         )
 
                         if (uri != null) {
-                            val intent = Intent(
-                                Intent.ACTION_SEND
-                            ).apply {
-                                type = "text/plain"
-
-                                putExtra(
-                                    Intent.EXTRA_STREAM,
-                                    uri
-                                )
-
-                                addFlags(
-                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                )
-                            }
+                            val intent =
+                                Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(
+                                        Intent.EXTRA_STREAM,
+                                        uri
+                                    )
+                                    addFlags(
+                                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                    )
+                                }
 
                             context.startActivity(
                                 Intent.createChooser(
@@ -558,58 +578,58 @@ private fun CodeBlock(
                     }
 
                     HeaderIconButton(
-                        icon = if (copied) {
-                            Icons.Default.Check
-                        } else {
-                            Icons.Default.ContentCopy
-                        },
-                        contentDescription = "Copy code"
+                        icon =
+                            if (copied) {
+                                Icons.Default.Check
+                            } else {
+                                Icons.Default.ContentCopy
+                            },
+                        contentDescription =
+                            if (copied) {
+                                "Copied"
+                            } else {
+                                "Copy code"
+                            }
                     ) {
                         clipboard.setText(
                             AnnotatedString(code)
                         )
-
                         copied = true
                     }
 
                     HeaderIconButton(
-                        icon = Icons.Default.KeyboardArrowDown,
-                        contentDescription = if (expanded) {
-                            "Collapse"
-                        } else {
-                            "Expand"
-                        },
-                        modifier = Modifier.rotate(
-                            chevronRotation
-                        )
+                        icon =
+                            Icons.Default.KeyboardArrowDown,
+                        contentDescription =
+                            if (expanded) {
+                                "Collapse"
+                            } else {
+                                "Expand"
+                            },
+                        modifier =
+                            Modifier.rotate(chevronRotation)
                     ) {
                         manuallyExpanded = !manuallyExpanded
                     }
                 }
             }
 
-            /*
-             * Don't create the scrolling container at all while collapsed.
-             */
-            AnimatedVisibility(
-                visible = expanded
-            ) {
+            /* ------------------------------------------------------------------ */
+            /* Code content                                                       */
+            /* ------------------------------------------------------------------ */
 
-                /*
-                 * IMPORTANT:
-                 *
-                 * heightIn(max = ...)
-                 * comes BEFORE verticalScroll().
-                 *
-                 * Therefore the vertical scrolling child can never receive
-                 * an infinite maximum height from the LazyColumn.
-                 */
+            if (expanded) {
+
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        /*
+                         * THIS MUST ALWAYS EXIST ABOVE verticalScroll().
+                         *
+                         * Both live and completed code blocks are now safe
+                         * inside LazyColumn.
+                         */
                         .heightIn(
-                            min = 0.dp,
-                            max = maxCodeHeight
+                            max = codeMaxHeight
                         )
                         .verticalScroll(
                             verticalScrollState
@@ -620,13 +640,16 @@ private fun CodeBlock(
                         .padding(14.dp)
                 ) {
 
-                    Text(
-                        text = code,
-                        fontFamily = MonoFamily,
-                        style = MaterialTheme.typography.bodyMedium,
-                        lineHeight = 20.sp,
-                        softWrap = false
-                    )
+                    SelectionContainer {
+
+                        Text(
+                            text = code,
+                            fontFamily = MonoFamily,
+                            style =
+                                MaterialTheme.typography.bodyMedium,
+                            lineHeight = 20.sp
+                        )
+                    }
                 }
             }
         }
@@ -634,7 +657,7 @@ private fun CodeBlock(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Header button                                                              */
+/* Header icon button                                                         */
 /* -------------------------------------------------------------------------- */
 
 @Composable
@@ -644,58 +667,108 @@ private fun HeaderIconButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    IconButton(
+    androidx.compose.material3.IconButton(
         onClick = onClick,
-        modifier = Modifier.size(28.dp)
+        modifier = Modifier.size(30.dp)
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = modifier.size(16.dp)
+            tint =
+                MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = modifier.size(17.dp)
         )
     }
 }
 
 /* -------------------------------------------------------------------------- */
-/* Saved code snippets                                                        */
+/* Language display                                                           */
+/* -------------------------------------------------------------------------- */
+
+private fun displayLanguage(
+    language: String?
+): String {
+    val normalized = language
+        ?.trim()
+        ?.ifBlank { null }
+
+    return normalized
+        ?.replaceFirstChar {
+            if (it.isLowerCase()) {
+                it.titlecase()
+            } else {
+                it.toString()
+            }
+        }
+        ?: "Text"
+}
+
+/* -------------------------------------------------------------------------- */
+/* File extension                                                             */
 /* -------------------------------------------------------------------------- */
 
 private fun extensionFor(
     language: String?
-): String =
-    when (language?.lowercase()?.trim()) {
+): String {
+    return when (
+        language
+            ?.lowercase()
+            ?.trim()
+    ) {
 
-        "kotlin", "kt" -> "kt"
+        "kotlin",
+        "kt" -> "kt"
+
         "java" -> "java"
 
-        "python", "py" -> "py"
+        "python",
+        "py" -> "py"
 
-        "javascript", "js" -> "js"
-        "typescript", "ts" -> "ts"
+        "javascript",
+        "js" -> "js"
+
+        "typescript",
+        "ts" -> "ts"
 
         "tsx" -> "tsx"
+
         "jsx" -> "jsx"
 
-        "html" -> "html"
+        "html",
+        "htm" -> "html"
+
         "css" -> "css"
 
+        "scss" -> "scss"
+
         "json" -> "json"
+
         "xml" -> "xml"
 
-        "bash", "sh", "shell" -> "sh"
+        "bash",
+        "sh",
+        "shell" -> "sh"
 
         "sql" -> "sql"
 
-        "yaml", "yml" -> "yaml"
+        "yaml",
+        "yml" -> "yaml"
 
-        "markdown", "md" -> "md"
+        "markdown",
+        "md" -> "md"
 
         "c" -> "c"
-        "cpp", "c++" -> "cpp"
+
+        "cpp",
+        "c++" -> "cpp"
+
+        "csharp",
+        "cs" -> "cs"
 
         "go" -> "go"
-        "rust", "rs" -> "rs"
+
+        "rust",
+        "rs" -> "rs"
 
         "swift" -> "swift"
 
@@ -703,13 +776,26 @@ private fun extensionFor(
 
         "php" -> "php"
 
-        "ruby", "rb" -> "rb"
+        "ruby",
+        "rb" -> "rb"
 
-        "csharp", "cs", "c#" -> "cs"
+        "text",
+        "txt" -> "txt"
 
         else -> "txt"
     }
+}
 
+/* -------------------------------------------------------------------------- */
+/* Save snippet                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Saves a temporary code snippet into cache and exposes it through the
+ * existing FileProvider.
+ *
+ * This is intentionally a normal Kotlin function, not @Composable.
+ */
 private fun saveSnippetForSharing(
     context: Context,
     language: String?,
@@ -717,19 +803,21 @@ private fun saveSnippetForSharing(
 ): Uri? {
     return try {
 
-        val directory = java.io.File(
-            context.cacheDir,
-            "snippets"
-        ).apply {
-            mkdirs()
-        }
+        val directory =
+            java.io.File(
+                context.cacheDir,
+                "snippets"
+            ).apply {
+                mkdirs()
+            }
 
-        val file = java.io.File(
-            directory,
-            "snippet_${System.currentTimeMillis()}.${
-                extensionFor(language)
-            }"
-        )
+        val file =
+            java.io.File(
+                directory,
+                "snippet_${System.currentTimeMillis()}.${
+                    extensionFor(language)
+                }"
+            )
 
         file.writeText(code)
 
@@ -745,25 +833,27 @@ private fun saveSnippetForSharing(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Streaming indicator                                                       */
+/* Pulsing streaming indicator                                                */
 /* -------------------------------------------------------------------------- */
 
 @Composable
 private fun PulsingDot(
     color: Color
 ) {
-    val transition = rememberInfiniteTransition(
-        label = "code-pulse"
-    )
+    val transition =
+        rememberInfiniteTransition(
+            label = "markdown_pulse"
+        )
 
     val alpha by transition.animateFloat(
         initialValue = 0.3f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(700),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "code-alpha"
+        animationSpec =
+            infiniteRepeatable(
+                animation = tween(700),
+                repeatMode = RepeatMode.Reverse
+            ),
+        label = "markdown_pulse_alpha"
     )
 
     Surface(
@@ -774,7 +864,7 @@ private fun PulsingDot(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Public Markdown composable                                                */
+/* Markdown text                                                              */
 /* -------------------------------------------------------------------------- */
 
 @Composable
@@ -793,23 +883,26 @@ fun MarkdownText(
         )
 
     Column(
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
     ) {
 
-        blocks.forEach { block ->
+        for (block in blocks) {
 
             when (block) {
 
                 is MdBlock.Code -> {
+
                     CodeBlock(
                         language = block.language,
                         code = block.code,
-                        live = isStreaming && block.isOpen,
-                        blockId = block.id
+                        live =
+                            isStreaming &&
+                                block.isOpen
                     )
                 }
 
                 is MdBlock.Text -> {
+
                     MarkdownTextBlock(
                         content = block.content,
                         codeBackground = codeBackground
@@ -821,7 +914,7 @@ fun MarkdownText(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Text Markdown block                                                        */
+/* Normal Markdown text block                                                 */
 /* -------------------------------------------------------------------------- */
 
 @Composable
@@ -829,284 +922,292 @@ private fun MarkdownTextBlock(
     content: String,
     codeBackground: Color
 ) {
-    val lines = content
-        .replace("\r\n", "\n")
-        .replace('\r', '\n')
-        .split('\n')
+    if (content.isBlank()) return
 
     SelectionContainer {
 
-        Column(
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Column {
 
-            var paragraphBuffer = StringBuilder()
+            val lines = content
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .split("\n")
 
-            fun flushParagraph() {
-                if (paragraphBuffer.isEmpty()) return
+            var index = 0
 
-                val paragraph = paragraphBuffer
-                    .toString()
-                    .trim()
+            while (index < lines.size) {
 
-                if (paragraph.isNotEmpty()) {
-                    Text(
-                        text = renderInline(
-                            paragraph,
-                            codeBackground
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(
-                            top = 3.dp,
-                            bottom = 3.dp
-                        )
-                    )
+                val rawLine = lines[index]
+
+                /*
+                 * Preserve paragraph separation without rendering empty
+                 * Text composables.
+                 */
+                if (rawLine.isBlank()) {
+                    index++
+                    continue
                 }
 
-                paragraphBuffer = StringBuilder()
-            }
+                val header =
+                    HEADER_LINE.matchEntire(rawLine)
 
-            lines.forEach { rawLine ->
+                val bullet =
+                    BULLET_LINE.matchEntire(rawLine)
 
-                val line = rawLine.trimEnd()
+                val numbered =
+                    NUMBERED_LINE.matchEntire(rawLine)
 
-                val header = HEADER_LINE.matchEntire(line)
-                val task = TASK_LINE.matchEntire(line)
-                val bullet = BULLET_LINE.matchEntire(line)
-                val numbered = NUMBERED_LINE.matchEntire(line)
-                val quote = QUOTE_LINE.matchEntire(line)
+                val quote =
+                    QUOTE_LINE.matchEntire(rawLine)
+
+                val horizontalRule =
+                    HORIZONTAL_RULE.matches(rawLine)
 
                 when {
 
-                    /* Blank line = paragraph boundary */
-                    line.isBlank() -> {
-                        flushParagraph()
-                    }
+                    /* ------------------------------------------------------ */
+                    /* Horizontal rule                                         */
+                    /* ------------------------------------------------------ */
 
-                    /* Horizontal rule */
-                    HORIZONTAL_RULE.matches(line) -> {
-                        flushParagraph()
+                    horizontalRule -> {
 
                         Surface(
+                            color =
+                                MaterialTheme.colorScheme
+                                    .outline.copy(alpha = 0.55f),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
                                     vertical = 8.dp
-                                ),
-                            color = MaterialTheme.colorScheme.outline.copy(
-                                alpha = 0.35f
-                            )
-                        ) {
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .size(height = 1.dp, width = 1.dp)
-                            )
-                        }
+                                )
+                                .size(
+                                    height = 1.dp,
+                                    width = 1.dp
+                                )
+                        ) {}
                     }
 
-                    /* Heading */
+                    /* ------------------------------------------------------ */
+                    /* Heading                                                  */
+                    /* ------------------------------------------------------ */
+
                     header != null -> {
-                        flushParagraph()
 
                         val level =
                             header.groupValues[1].length
 
+                        val headingText =
+                            header.groupValues[2]
+                                .trim()
+
                         val style =
                             when (level) {
-                                1 -> MaterialTheme.typography.headlineSmall
-                                2 -> MaterialTheme.typography.titleLarge
-                                3 -> MaterialTheme.typography.titleMedium
-                                else -> MaterialTheme.typography.titleSmall
+
+                                1 ->
+                                    MaterialTheme.typography
+                                        .headlineSmall
+
+                                2 ->
+                                    MaterialTheme.typography
+                                        .titleLarge
+
+                                3 ->
+                                    MaterialTheme.typography
+                                        .titleMedium
+
+                                else ->
+                                    MaterialTheme.typography
+                                        .bodyLarge
                             }
 
                         Text(
                             text = renderInline(
-                                header.groupValues[2],
+                                headingText,
                                 codeBackground
                             ),
                             style = style,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(
-                                top = if (level <= 2) 10.dp else 6.dp,
-                                bottom = 4.dp
+                                top =
+                                    if (level <= 2) {
+                                        10.dp
+                                    } else {
+                                        6.dp
+                                    },
+                                bottom = 3.dp
                             )
                         )
                     }
 
-                    /* Task list */
-                    task != null -> {
-                        flushParagraph()
+                    /* ------------------------------------------------------ */
+                    /* Bullet list                                              */
+                    /* ------------------------------------------------------ */
 
-                        val checked =
-                            task.groupValues[2]
-                                .equals("x", ignoreCase = true)
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    top = 3.dp,
-                                    bottom = 3.dp
-                                ),
-                            verticalAlignment = Alignment.Top,
-                            horizontalArrangement =
-                                Arrangement.spacedBy(8.dp)
-                        ) {
-
-                            Text(
-                                text = if (checked) {
-                                    "☑"
-                                } else {
-                                    "☐"
-                                },
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-
-                            Text(
-                                text = renderInline(
-                                    task.groupValues[3],
-                                    codeBackground
-                                ),
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
-
-                    /* Bullet list */
                     bullet != null -> {
-                        flushParagraph()
-
-                        val indent =
-                            (bullet.groupValues[1].length * 4)
-                                .coerceAtMost(48)
 
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
-                                    start = indent.dp,
-                                    top = 2.dp,
-                                    bottom = 2.dp
+                                    start = 4.dp,
+                                    top = 2.dp
                                 ),
-                            verticalAlignment = Alignment.Top
+                            verticalAlignment =
+                                Alignment.Top
                         ) {
 
                             Text(
                                 text = "•",
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(
-                                    end = 8.dp
-                                )
+                                style =
+                                    MaterialTheme.typography
+                                        .bodyMedium,
+                                modifier =
+                                    Modifier.padding(
+                                        end = 8.dp
+                                    )
                             )
 
                             Text(
                                 text = renderInline(
-                                    bullet.groupValues[2],
+                                    bullet.groupValues[1]
+                                        .trim(),
                                     codeBackground
                                 ),
-                                style = MaterialTheme.typography.bodyMedium
+                                style =
+                                    MaterialTheme.typography
+                                        .bodyMedium,
+                                modifier =
+                                    Modifier.weight(1f)
                             )
                         }
                     }
 
-                    /* Numbered list */
-                    numbered != null -> {
-                        flushParagraph()
+                    /* ------------------------------------------------------ */
+                    /* Numbered list                                           */
+                    /* ------------------------------------------------------ */
 
-                        val indent =
-                            (numbered.groupValues[1].length * 4)
-                                .coerceAtMost(48)
+                    numbered != null -> {
 
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
-                                    start = indent.dp,
-                                    top = 2.dp,
-                                    bottom = 2.dp
+                                    start = 4.dp,
+                                    top = 2.dp
                                 ),
-                            verticalAlignment = Alignment.Top
+                            verticalAlignment =
+                                Alignment.Top
                         ) {
 
                             Text(
-                                text = "${numbered.groupValues[2]}.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(
-                                    end = 8.dp
-                                )
+                                text =
+                                    "${numbered.groupValues[1]}.",
+                                style =
+                                    MaterialTheme.typography
+                                        .bodyMedium,
+                                modifier =
+                                    Modifier.padding(
+                                        end = 8.dp
+                                    )
                             )
 
                             Text(
                                 text = renderInline(
-                                    numbered.groupValues[3],
+                                    numbered.groupValues[2]
+                                        .trim(),
                                     codeBackground
                                 ),
-                                style = MaterialTheme.typography.bodyMedium
+                                style =
+                                    MaterialTheme.typography
+                                        .bodyMedium,
+                                modifier =
+                                    Modifier.weight(1f)
                             )
                         }
                     }
 
-                    /* Blockquote */
+                    /* ------------------------------------------------------ */
+                    /* Blockquote                                               */
+                    /* ------------------------------------------------------ */
+
                     quote != null -> {
-                        flushParagraph()
 
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(5.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    top = 3.dp,
-                                    bottom = 3.dp
-                                )
+                            color =
+                                MaterialTheme.colorScheme
+                                    .surfaceVariant,
+                            shape =
+                                RoundedCornerShape(6.dp),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        top = 3.dp,
+                                        bottom = 2.dp
+                                    )
                         ) {
 
                             Row(
-                                modifier = Modifier.fillMaxWidth()
+                                verticalAlignment =
+                                    Alignment.Top
                             ) {
 
-                                Box(
-                                    Modifier
-                                        .size(
+                                Surface(
+                                    color =
+                                        MaterialTheme.colorScheme
+                                            .primary,
+                                    modifier =
+                                        Modifier.size(
                                             width = 3.dp,
-                                            height = 1.dp
+                                            height = 36.dp
                                         )
-                                        .align(Alignment.CenterVertically)
-                                )
+                                ) {}
 
                                 Text(
                                     text = renderInline(
                                         quote.groupValues[1],
                                         codeBackground
                                     ),
-                                    modifier = Modifier.padding(
-                                        10.dp
-                                    ),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontStyle = FontStyle.Italic
+                                    modifier =
+                                        Modifier.padding(
+                                            horizontal = 10.dp,
+                                            vertical = 8.dp
+                                        ),
+                                    style =
+                                        MaterialTheme.typography
+                                            .bodyMedium,
+                                    fontStyle =
+                                        FontStyle.Italic
                                 )
                             }
                         }
                     }
 
-                    /*
-                     * Normal line.
-                     *
-                     * Consecutive normal lines become one paragraph instead
-                     * of creating artificial line spacing.
-                     */
-                    else -> {
-                        if (paragraphBuffer.isNotEmpty()) {
-                            paragraphBuffer.append(' ')
-                        }
+                    /* ------------------------------------------------------ */
+                    /* Normal paragraph                                         */
+                    /* ------------------------------------------------------ */
 
-                        paragraphBuffer.append(line.trim())
+                    else -> {
+
+                        Text(
+                            text = renderInline(
+                                rawLine,
+                                codeBackground
+                            ),
+                            style =
+                                MaterialTheme.typography
+                                    .bodyMedium,
+                            modifier =
+                                Modifier.padding(
+                                    top = 2.dp,
+                                    bottom = 1.dp
+                                )
+                        )
                     }
                 }
-            }
 
-            flushParagraph()
+                index++
+            }
         }
     }
 }
